@@ -1,4 +1,4 @@
-# 🧹 MemeDrawer (Meme Drawer)
+# 🧹 MemeDrawer
 
 ![MemeDrawer Ad Banner](memedrawer_ad.jpg)
 
