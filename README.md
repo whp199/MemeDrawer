@@ -32,16 +32,31 @@ MemeDrawer features a cute anime maid mascot, **Mimi**, who guides you through t
 
 ---
 
-## 🛠️ Installation
+## 🛠️ Installation & Running (No global pip needed)
 
-MemeDrawer is packaged using `uv` for modern, fast Python package management.
+MemeDrawer is packaged using `uv` (Astral's fast Python packaging tool written in Rust). This makes running the app on Gentoo or other Linux distributions extremely easy without needing global `pip` or risk polluting your system package manager (Portage).
 
-1. **Clone the repository** (or run inside the project workspace directory).
-2. **Install dependencies** (or let `uv` handle running the app):
-   ```bash
-   uv pip install -e .
-   ```
-   *This makes the `memedrawer` command available globally in your virtual environment.*
+### 1. Install `uv`
+If you don't have `uv` installed:
+- **Gentoo (Portage)**:
+  ```bash
+  sudo emerge dev-python/uv
+  ```
+- **Standalone Installer**:
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
+
+### 2. Run MemeDrawer (Zero Setup)
+Simply navigate to the project directory and run:
+```bash
+# Run the interactive drag-and-drop cleaning mode
+uv run python main.py
+
+# Or run specific CLI commands directly
+uv run python main.py sort /path/to/memes -w
+```
+*`uv` will automatically fetch the correct Python version, configure an isolated virtual environment, download the required dependencies defined in `pyproject.toml`, and run the app in one command.*
 
 ---
 
