@@ -125,6 +125,8 @@ def sort(
         console.print(get_mimi_speech(f"Master, the path [bold red]{directory}[/bold red] doesn't seem to exist or is not a directory. Please check it!", "sad"))
         raise typer.Exit(code=1)
 
+    directory = directory.resolve()
+
     # Initialize Engine
     engine = SorterEngine(directory, config, dry_run=dry_run, rename=rename)
     
