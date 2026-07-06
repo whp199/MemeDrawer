@@ -22,57 +22,35 @@ def init():
     console.print(get_mimi_speech(MIMI_QUOTES["welcome"][0], expression="happy"))
     
     current_config = load_config()
+    # 1. Select provider (always "local" for local models)
+    provider = "local"
     
-    # 1. Select provider
-    provider = typer.prompt(
-        "Choose AI provider (gemini / openai)",
-        default=current_config.provider
-    ).strip().lower()
-    
-    if provider not in ("gemini", "openai"):
-        console.print("[bold red]Invalid provider! Falling back to gemini.[/bold red]")
-        provider = "gemini"
-        
-    gemini_key = current_config.gemini_api_key
-    gemini_model = current_config.gemini_model
     openai_key = current_config.openai_api_key
     openai_url = current_config.openai_base_url
     openai_model = current_config.openai_model
     
-    if provider == "gemini":
-        gemini_key = typer.prompt(
-            "Enter your Google Gemini API Key",
-            default=gemini_key or "",
-            hide_input=True
-        )
-        gemini_model = typer.prompt(
-            "Enter Gemini model name",
-            default=gemini_model
-        )
-    else:
-        openai_url = typer.prompt(
-            "Enter OpenAI-compatible endpoint URL (e.g., LM-Studio)",
-            default=openai_url
-        )
-        openai_key = typer.prompt(
-            "Enter API Key (press Enter if none/local)",
-            default=openai_key or "",
-            hide_input=True
-        )
-        if not openai_key:
-            openai_key = None
-        openai_model = typer.prompt(
-            "Enter local model name",
-            default=openai_model
-        )
+    openai_url = typer.prompt(
+        "Enter local OpenAI-compatible endpoint URL (e.g., LM-Studio, Ollama)",
+        default=openai_url
+    )
+    openai_key = typer.prompt(
+        "Enter API Key (press Enter if none/local)",
+        default=openai_key or "",
+        hide_input=True
+    )
+    if not openai_key:
+        openai_key = None
+    openai_model = typer.prompt(
+        "Enter local model name",
+        default=openai_model
+    )
 
     # Common Settings
     rename = typer.confirm("Would you like Mimi to rename memes descriptively by default?", default=current_config.rename_files)
     
-    default_concurrency = 3 if provider == "gemini" else 1
     concurrency = typer.prompt(
-        "Enter maximum parallel requests (use 1 for local models to prevent CPU/GPU overload)",
-        default=current_config.concurrency or default_concurrency,
+        "Enter maximum parallel requests (concurrency=1 is highly recommended for local endpoints)",
+        default=current_config.concurrency or 1,
         type=int
     )
     
@@ -81,8 +59,6 @@ def init():
     # Save globally
     new_config = AppConfig(
         provider=provider,
-        gemini_api_key=gemini_key if gemini_key else None,
-        gemini_model=gemini_model,
         openai_api_key=openai_key,
         openai_base_url=openai_url,
         openai_model=openai_model,
@@ -112,13 +88,9 @@ def status():
     table.add_row("Config Path (Local)", str(local_path) if local_path.exists() else "None (using global/default)")
     table.add_row("Active Provider", config.provider)
     
-    if config.provider == "gemini":
-        table.add_row("Gemini Model", config.gemini_model)
-        table.add_row("Gemini API Key", "Configured (Hidden)" if config.gemini_api_key else "[red]Not configured![/red]")
-    else:
-        table.add_row("OpenAI Base URL", config.openai_base_url)
-        table.add_row("OpenAI Model", config.openai_model)
-        table.add_row("OpenAI API Key", "Configured (Hidden)" if config.openai_api_key else "None (or local bypass)")
+    table.add_row("OpenAI Base URL", config.openai_base_url)
+    table.add_row("OpenAI Model", config.openai_model)
+    table.add_row("OpenAI API Key", "Configured (Hidden)" if config.openai_api_key else "None (or local bypass)")
         
     table.add_row("Default Concurrency", str(config.concurrency))
     table.add_row("Rename Files By Default", "Yes" if config.rename_files else "No")
@@ -126,12 +98,7 @@ def status():
     table.add_row("Reaction Folder Name", config.reaction_images_dir)
     
     console.print(table)
-    
-    # Simple speech check from Mimi
-    if config.provider == "gemini" and not config.gemini_api_key:
-        console.print(get_mimi_speech("Master, you selected Gemini but haven't set an API key. Please run `memedrawer init` or set GEMINI_API_KEY environment variable!", "sad"))
-    else:
-        console.print(get_mimi_speech("Your settings look perfect! Mimi is ready to sweep some files.", "happy"))
+    console.print(get_mimi_speech("Your settings look perfect! Mimi is ready to sweep some files.", "happy"))
 
 @app.command()
 def sort(
@@ -318,6 +285,31 @@ def sort(
         
     console.print(get_mimi_speech(msg, expression=expr))
 
+    # Determine favorite meme from the session's cached comments
+    if with_comments:
+        meme_comments = []
+        for last_file, status, details, commentary in recent_actions:
+            if "OK" in status and commentary and commentary != "N/A":
+                meme_comments.append({
+                    "filename": last_file,
+                    "commentary": commentary
+                })
+        
+        if meme_comments:
+            console.print("\n")
+            with console.status("[bold pink]Mimi is thinking about her favorite meme...[/bold pink]"):
+                try:
+                    favorite_speech = engine.classifier.determine_favorite_meme(meme_comments)
+                except Exception as e:
+                    favorite_speech = f"I liked all of them so much, Master! Especially {meme_comments[0]['filename']}!"
+            
+            if favorite_speech:
+                console.print(get_mimi_speech(
+                    f"Oh, by the way, Master! {favorite_speech}",
+                    expression="proud",
+                    title="Mimi's Favorite Meme"
+                ))
+
 @app.command()
 def undo():
     """Revert the last sorting operation."""
@@ -381,10 +373,8 @@ def run_interactive_entry():
         break
         
     # Check if configured
-    config = load_config()
-    is_configured = True
-    if config.provider == "gemini" and not config.gemini_api_key:
-        is_configured = False
+    local_path, global_path = get_config_paths()
+    is_configured = local_path.exists() or global_path.exists()
     
     # If not configured, run interactive wizard
     if not is_configured:

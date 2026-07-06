@@ -13,7 +13,7 @@
  (_______)
 ```
 
-MemeDrawer is a beautiful, intuitive Python CLI application designed to organize and rename large, messy folders of memes, image macros, and reaction images. It uses multimodal LLMs (either local models via LM-Studio/Ollama or cloud models like Google Gemini) to analyze images, classify them into appropriate categories (such as 4chan boards like `/g/` or `/pol/`, or emotions like `reaction images/happy`), and rename them descriptively.
+MemeDrawer is a beautiful, intuitive Python CLI application designed to organize and rename large, messy folders of memes, image macros, and reaction images. It uses local multimodal LLMs (via LM-Studio, Ollama, llama.cpp, etc.) to analyze images, classify them into appropriate categories (such as 4chan boards like `/g/` or `/pol/`, or emotions like `reaction images/happy`), and rename them descriptively.
 
 MemeDrawer features a cute anime maid mascot, **Mimi**, who guides you through the process with custom interactive dialogue and beautiful terminal visuals using `rich`.
 
@@ -21,7 +21,7 @@ MemeDrawer features a cute anime maid mascot, **Mimi**, who guides you through t
 
 ## ✨ Features
 
-- **🧠 Multimodal LLM Classification**: Connects to Google Gemini (highly recommended for speed/accuracy) or local OpenAI-compatible endpoints (like LM-Studio).
+- **🧠 Local Multimodal LLM Classification**: Connects to local OpenAI-compatible endpoints (like LM-Studio, Ollama, llama.cpp).
 - **⚡ Low Latency Optimization**: Preprocesses and compresses images in-memory (down to max 800px width/height JPEGs) to minimize upload bandwidth and inference times.
 - **🚀 High Throughput / Concurrency Control**: Process multiple images in parallel. Easily configurable to sequential mode (`--concurrency 1` or `--sequential`) to prevent consumer GPUs from bottlenecking when using local models.
 - **🔄 Safety First (Undo Log & Cache)**:
@@ -48,7 +48,7 @@ MemeDrawer is packaged using `uv` for modern, fast Python package management.
 ## 🚀 Commands
 
 ### 1. Initialize Configuration
-Set up your AI provider (Gemini vs. Local LM-Studio), API Keys, and default naming/sorting rules:
+Set up your local AI provider configurations (endpoint URL, API key, model name), and default naming/sorting rules:
 ```bash
 memedrawer init
 ```

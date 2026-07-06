@@ -122,57 +122,56 @@ class LLMClassifier:
         self.config = config
 
     def classify_image(self, image_path: Path) -> ClassificationResult:
-        """Classifies an image using either Gemini or OpenAI API based on config."""
+        """Classifies an image using local OpenAI API based on config."""
         try:
             image_bytes, mime_type = prepare_image(image_path)
         except Exception as e:
             raise ValueError(f"Failed to load or process image: {e}")
 
-        if self.config.provider == "gemini":
-            return self._classify_gemini(image_bytes, mime_type)
-        elif self.config.provider == "openai":
-            return self._classify_openai(image_bytes, mime_type)
-        else:
-            raise ValueError(f"Unknown provider: {self.config.provider}")
+        return self._classify_openai(image_bytes, mime_type)
 
-    def _classify_gemini(self, image_bytes: bytes, mime_type: str) -> ClassificationResult:
-        from google import genai
-        from google.genai import types
+    def get_text_completion(self, prompt: str) -> str:
+        """Runs a text completion on the configured local OpenAI server."""
+        from openai import OpenAI
 
-        api_key = self.config.gemini_api_key
-        if not api_key:
-            # Fall back to env var check
-            import os
-            api_key = os.environ.get("GEMINI_API_KEY")
+        api_key = self.config.openai_api_key or "no-key-needed"
+        base_url = self.config.openai_base_url
+        model_name = self.config.openai_model
+
+        client = OpenAI(
+            api_key=api_key,
+            base_url=base_url
+        )
+
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0.7,
+        )
+
+        return response.choices[0].message.content or ""
+
+    def determine_favorite_meme(self, meme_comments: list[dict[str, str]]) -> str:
+        """Determines Mimi's favorite meme from the list of processed memes and comments."""
+        if not meme_comments:
+            return ""
+
+        prompt = "Here is a list of memes Mimi the maid sorted, along with her thoughts on each:\n\n"
+        for idx, item in enumerate(meme_comments):
+            prompt += f"{idx + 1}. Filename: {item['filename']} | thoughts: {item['commentary']}\n"
             
-        if not api_key:
-            raise ValueError("Gemini API key is not configured. Please set gemini_api_key in config or GEMINI_API_KEY environment variable.")
+        prompt += "\nIdentify which single meme from the list above is Mimi's favorite based on the comments. Respond in character as Mimi (a polite, cute anime maid). Tell 'Master' which filename is your favorite and give a short, cute explanation why in under 20 words."
 
-        # Initialize the new Google GenAI SDK client
-        client = genai.Client(api_key=api_key)
-
-        # Prepare the image part
-        image_part = types.Part.from_bytes(
-            data=image_bytes,
-            mime_type=mime_type
-        )
-
-        # Execute generation with Structured Outputs (JSON Schema)
-        response = client.models.generate_content(
-            model=self.config.gemini_model,
-            contents=[image_part, CLASSIFICATION_PROMPT],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=ClassificationResult,
-                temperature=0.1,
-            )
-        )
-
-        if not response.text:
-            raise ValueError("Received empty response from Gemini API.")
-
-        clean_json = clean_json_response(response.text)
-        return ClassificationResult.model_validate_json(clean_json)
+        try:
+            content = self.get_text_completion(prompt)
+            return content.strip()
+        except Exception as e:
+            # Fallback to the first meme
+            return f"I liked all of them so much, Master! Especially {meme_comments[0]['filename']}! (Error choosing: {e})"
 
     def _classify_openai(self, image_bytes: bytes, mime_type: str) -> ClassificationResult:
         from openai import OpenAI

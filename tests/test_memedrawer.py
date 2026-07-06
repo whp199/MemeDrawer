@@ -373,6 +373,25 @@ class TestAnimationAndCommentary(unittest.TestCase):
         
         temp_dir.cleanup()
 
+    def test_determine_favorite_meme(self):
+        from memedrawer.classifier import LLMClassifier
+        config = AppConfig(provider="openai")
+        classifier = LLMClassifier(config)
+        
+        # Mock get_text_completion
+        classifier.get_text_completion = lambda prompt: "My favorite was funny_cat.png because it's adorable!"
+        
+        comments = [
+            {"filename": "funny_cat.png", "commentary": "Cute kitten!"},
+            {"filename": "pepe.jpg", "commentary": "Feels good man!"}
+        ]
+        
+        fav = classifier.determine_favorite_meme(comments)
+        self.assertEqual(fav, "My favorite was funny_cat.png because it's adorable!")
+        
+        # Test empty comments handling
+        self.assertEqual(classifier.determine_favorite_meme([]), "")
+
 
 if __name__ == "__main__":
     unittest.main()

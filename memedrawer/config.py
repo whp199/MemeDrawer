@@ -8,13 +8,11 @@ CONFIG_DIR_NAME = "memedrawer"
 CONFIG_FILE_NAME = "config.json"
 
 class AppConfig(BaseModel):
-    provider: str = Field("gemini", description="AI Provider: 'gemini' or 'openai' (LM-Studio)")
-    gemini_api_key: Optional[str] = Field(None, description="Google Gemini API Key")
-    gemini_model: str = Field("gemini-2.5-flash", description="Gemini Vision Model name")
-    openai_api_key: Optional[str] = Field(None, description="OpenAI / LM-Studio API Key (optional for local)")
-    openai_base_url: str = Field("http://localhost:1234/v1", description="OpenAI-compatible base URL")
-    openai_model: str = Field("local-model", description="Model name in LM-Studio / OpenAI")
-    concurrency: int = Field(3, description="Number of concurrent requests (set to 1 for sequential processing, highly recommended for local models)")
+    provider: str = Field("local", description="Local AI Provider: 'local' (e.g., LM-Studio, Ollama, llama.cpp)")
+    openai_api_key: Optional[str] = Field(None, description="API Key if needed (optional for local endpoints)")
+    openai_base_url: str = Field("http://localhost:1234/v1", description="Local OpenAI-compatible base URL (e.g., http://localhost:1234/v1 for LM-Studio)")
+    openai_model: str = Field("local-model", description="Model name in local server")
+    concurrency: int = Field(1, description="Number of concurrent requests (set to 1 for sequential processing, recommended for local models)")
     rename_files: bool = Field(True, description="Rename files using descriptive descriptions from LLM")
     rename_format: str = Field("{suggested_filename}", description="Naming format: e.g. '{suggested_filename}'")
     reaction_images_dir: str = Field("reaction images", description="Directory folder name for generic reaction images")
@@ -57,8 +55,6 @@ def load_config() -> AppConfig:
     # 3. Override with environment variables
     env_mappings = {
         "MEMEDRAWER_PROVIDER": "provider",
-        "GEMINI_API_KEY": "gemini_api_key",
-        "GEMINI_MODEL": "gemini_model",
         "OPENAI_API_KEY": "openai_api_key",
         "OPENAI_BASE_URL": "openai_base_url",
         "OPENAI_MODEL": "openai_model",
