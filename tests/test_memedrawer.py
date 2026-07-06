@@ -392,6 +392,33 @@ class TestAnimationAndCommentary(unittest.TestCase):
         # Test empty comments handling
         self.assertEqual(classifier.determine_favorite_meme([]), "")
 
+    def test_robust_llm_json_parsing(self):
+        from memedrawer.classifier import sanitize_llm_dict
+        
+        # Test mapping with varied keys and casing
+        raw = {
+            "PRIMARYfolder": "cooking",
+            "FILENAME": "yummy_food",
+            "Comment": "This looks delicious, Master!",
+            "BoardCode": "/ck/",
+            "Topic": "recipe"
+        }
+        
+        sanitized = sanitize_llm_dict(raw)
+        self.assertEqual(sanitized["primary_folder"], "cooking")
+        self.assertEqual(sanitized["suggested_filename"], "yummy_food")
+        self.assertEqual(sanitized["commentary"], "This looks delicious, Master!")
+        self.assertEqual(sanitized["board"], "/ck/")
+        self.assertEqual(sanitized["subcategory"], "recipe")
+        
+        # Test defaults for missing values
+        empty_sanitized = sanitize_llm_dict({})
+        self.assertEqual(empty_sanitized["primary_folder"], "miscellaneous")
+        self.assertEqual(empty_sanitized["suggested_filename"], "unnamed_meme")
+        self.assertIsNone(empty_sanitized["board"])
+        self.assertIsNone(empty_sanitized["subcategory"])
+        self.assertIsNone(empty_sanitized["commentary"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -117,6 +117,64 @@ def clean_json_response(text: str) -> str:
         return match.group(1).strip()
     return text
 
+def sanitize_llm_dict(raw_dict: dict) -> dict:
+    sanitized = {}
+    
+    # Lowercase all keys to make lookup case-insensitive
+    lower_dict = {str(k).lower(): v for k, v in raw_dict.items()}
+    
+    # 1. Map board
+    board_keys = ("board", "board_code", "boardcode", "board_sorting")
+    sanitized["board"] = None
+    for bk in board_keys:
+        if bk in lower_dict:
+            val = lower_dict[bk]
+            if val and val != "null" and val != "None":
+                sanitized["board"] = str(val).strip()
+            break
+            
+    # 2. Map primary_folder
+    folder_keys = ("primary_folder", "primaryfolder", "folder", "category", "primary_category", "primarycategory")
+    sanitized["primary_folder"] = "miscellaneous"
+    for fk in folder_keys:
+        if fk in lower_dict:
+            val = lower_dict[fk]
+            if val:
+                sanitized["primary_folder"] = str(val).strip()
+            break
+            
+    # 3. Map subcategory
+    sub_keys = ("subcategory", "sub_category", "subcategory", "topic")
+    sanitized["subcategory"] = None
+    for sk in sub_keys:
+        if sk in lower_dict:
+            val = lower_dict[sk]
+            if val and val != "null" and val != "None":
+                sanitized["subcategory"] = str(val).strip()
+            break
+            
+    # 4. Map suggested_filename
+    file_keys = ("suggested_filename", "suggestedfilename", "filename", "name", "suggested_name", "suggestedname")
+    sanitized["suggested_filename"] = "unnamed_meme"
+    for f_key in file_keys:
+        if f_key in lower_dict:
+            val = lower_dict[f_key]
+            if val:
+                sanitized["suggested_filename"] = str(val).strip()
+            break
+            
+    # 5. Map commentary
+    comment_keys = ("commentary", "comment", "mimi_comment", "mimi_commentary", "thoughts", "maid_comment", "comment_from_mimi")
+    sanitized["commentary"] = None
+    for ck in comment_keys:
+        if ck in lower_dict:
+            val = lower_dict[ck]
+            if val and val != "null" and val != "None":
+                sanitized["commentary"] = str(val).strip()
+            break
+            
+    return sanitized
+
 class LLMClassifier:
     def __init__(self, config: AppConfig):
         self.config = config
@@ -222,18 +280,26 @@ class LLMClassifier:
         if not content:
             raise ValueError("Received empty response from OpenAI endpoint.")
 
+        # Try to parse the content as JSON directly or using regex
+        parsed_dict = None
         clean_json = clean_json_response(content)
         try:
-            return ClassificationResult.model_validate_json(clean_json)
-        except Exception as parse_error:
-            # Local models might sometimes hallucinate keys or return invalid JSON.
-            # Let's try to extract JSON with regex if it failed
+            parsed_dict = json.loads(clean_json)
+        except Exception:
+            # Try to extract JSON using regex
             try:
-                # Basic cleaning and validation
-                # In case it returned standard text with JSON structure inside it
                 json_match = re.search(r"\{[\s\S]*\}", clean_json)
                 if json_match:
-                    return ClassificationResult.model_validate_json(json_match.group(0))
+                    parsed_dict = json.loads(json_match.group(0))
             except Exception:
                 pass
-            raise ValueError(f"Failed to parse LLM response as ClassificationResult. Raw response: {content}. Error: {parse_error}")
+
+        if isinstance(parsed_dict, dict):
+            try:
+                # Sanitize the dictionary keys and fallbacks
+                sanitized = sanitize_llm_dict(parsed_dict)
+                return ClassificationResult(**sanitized)
+            except Exception as parse_error:
+                raise ValueError(f"Failed to instantiate ClassificationResult from sanitized dict: {parsed_dict}. Error: {parse_error}")
+        else:
+            raise ValueError(f"Failed to parse LLM response as a JSON object. Raw response: {content}")
