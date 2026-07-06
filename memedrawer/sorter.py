@@ -103,12 +103,8 @@ class SorterEngine:
         original_ext = file_path.suffix.lower()
         if self.rename:
             base_name = result.suggested_filename
-        else:
-            base_name = file_path.stem
-
-        # Clean base_name (just in case the LLM returned weird chars)
-        base_name = "".join(c for c in base_name if c.isalnum() or c in ("-", "_")).strip().lower()
-        if self.rename:
+            # Clean base_name (just in case the LLM returned weird chars)
+            base_name = "".join(c for c in base_name if c.isalnum() or c in ("-", "_")).strip().lower()
             # Remove 'meme' or 'memes' as standalone words (e.g. 'cat_meme' -> 'cat', 'meme_cat' -> 'cat')
             import re
             parts = re.split(r'([_-])', base_name)
@@ -119,6 +115,8 @@ class SorterEngine:
             cleaned = cleaned.strip('_')
             if cleaned:
                 base_name = cleaned
+        else:
+            base_name = file_path.stem
 
         if not base_name:
             base_name = "unnamed_meme"

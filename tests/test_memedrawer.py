@@ -184,6 +184,21 @@ class TestSorterLogic(unittest.TestCase):
         expected = self.target_dir / "tg" / "black_lotus.jpg"
         self.assertEqual(target.resolve(), expected.resolve())
 
+    def test_determine_target_path_no_rename(self):
+        # When rename is False, it should preserve the exact filename stem
+        self.engine.rename = False
+        result = ClassificationResult(
+            board="/g/",
+            primary_folder="technology",
+            subcategory="programming",
+            suggested_filename="gemma_cpp_compiling"
+        )
+        file_path = self.target_dir / "My Awesome Image 2026.PNG"
+        target = self.engine.determine_target_path(file_path, result)
+        expected = self.target_dir / "g" / "programming" / "My Awesome Image 2026.png"
+        self.assertEqual(target.resolve(), expected.resolve())
+        self.engine.rename = True
+
     def test_determine_target_path_strip_meme(self):
         # Redundant 'meme' or 'memes' stripping from suggested filename
         result1 = ClassificationResult(

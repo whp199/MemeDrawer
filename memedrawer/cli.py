@@ -114,7 +114,7 @@ def sort(
     config = load_config()
     
     # Overrides
-    rename = not no_rename
+    rename = config.rename_files and not no_rename
     active_concurrency = config.concurrency
     if sequential:
         active_concurrency = 1
