@@ -6,12 +6,43 @@ import typer
 from rich.console import Console, Group
 from rich.table import Table
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, MofNCompleteColumn, TimeRemainingColumn
+from rich.text import Text
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, MofNCompleteColumn, ProgressColumn
 from rich.live import Live
 
 from memedrawer.config import AppConfig, load_config, save_config, get_config_paths
 from memedrawer.sorter import SorterEngine
 from memedrawer.maid_art import get_mimi_speech, MIMI_QUOTES
+
+class MemesPerMinuteColumn(ProgressColumn):
+    """Renders processing rate as memes-per-minute (MPM)."""
+    def render(self, task) -> Text:
+        speed = task.finished_speed or task.speed
+        if speed is None:
+            return Text("0.0 mpm", style="progress.data.speed")
+        mpm = speed * 60.0
+        return Text(f"{mpm:.1f} mpm", style="progress.data.speed")
+
+class MemeETAColumn(ProgressColumn):
+    """Renders calculated ETA based on the current MPM rate."""
+    def render(self, task) -> Text:
+        if task.finished:
+            return Text("ETA: 00:00", style="progress.remaining")
+        speed = task.finished_speed or task.speed
+        if speed is None or speed <= 0:
+            return Text("ETA: --:--", style="progress.remaining")
+        
+        remaining = task.total - task.completed
+        eta_seconds = remaining / speed
+        
+        hours, remainder = divmod(int(eta_seconds), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours > 0:
+            eta_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        else:
+            eta_str = f"{minutes:02d}:{seconds:02d}"
+            
+        return Text(f"ETA: {eta_str}", style="progress.remaining")
 
 app = typer.Typer(help="MemeDrawer: A beautiful CLI tool to sort and rename your messy meme folders with Mimi the maid!")
 console = Console()
@@ -160,7 +191,8 @@ def sort(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         MofNCompleteColumn(),
-        TimeRemainingColumn(),
+        MemesPerMinuteColumn(),
+        MemeETAColumn(),
         console=console
     )
     

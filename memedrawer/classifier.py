@@ -88,7 +88,9 @@ def prepare_image(image_path: Path, max_size: int = 800) -> tuple[bytes, str]:
         mime_type = "image/jpeg"
         
     # Standardize image modes to RGB/RGBA
-    if img.mode not in ("RGB", "RGBA"):
+    if img.mode == "P" and "transparency" in img.info:
+        img = img.convert("RGBA")
+    elif img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
         
     # Resize keeping aspect ratio
