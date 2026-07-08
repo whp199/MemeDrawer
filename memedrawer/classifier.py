@@ -249,11 +249,14 @@ class LLMClassifier:
         )
 
         prompt_text = CLASSIFICATION_PROMPT
-        if allowed_subfolders:
+        if allowed_subfolders is not None:
             prompt_text += "\nSTRICT SUBFOLDER CONSTRAINT:\n"
-            prompt_text += "You MUST restrict the 'subcategory' field for each category/board to ONLY the existing subfolders listed below. If the image does not fit any of the listed subfolders for that category/board, you MUST set 'subcategory' to null.\n"
-            for folder, subs in allowed_subfolders.items():
-                prompt_text += f"- For category/board folder '{folder}': allowed subcategories are {', '.join(subs)}\n"
+            if allowed_subfolders:
+                prompt_text += "You MUST restrict the 'subcategory' field for each category/board to ONLY the existing subfolders listed below. If the image does not fit any of the listed subfolders for that category/board, you MUST set 'subcategory' to null.\n"
+                for folder, subs in allowed_subfolders.items():
+                    prompt_text += f"- For category/board folder '{folder}': allowed subcategories are {', '.join(subs)}\n"
+            else:
+                prompt_text += "There are no existing subfolders in the destination. You MUST set 'subcategory' to null for all images.\n"
 
         messages = [
             {

@@ -202,7 +202,7 @@ class SorterEngine:
                             self.cache[file_hash] = classification.model_dump()
 
                     # Enforce strict subfolders list if active
-                    if self.config.strict_subfolders and allowed_subs:
+                    if self.config.strict_subfolders and allowed_subs is not None:
                         folder_key = None
                         if self.config.board_sorting and classification.board:
                             folder_key = classification.board.strip("/")

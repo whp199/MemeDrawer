@@ -377,6 +377,37 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         
         self.engine.config.strict_subfolders = False
 
+    def test_strict_subfolders_enforcement_empty(self):
+        self.engine.config.strict_subfolders = True
+        
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        file1 = self.target_dir / "input_strict_empty.png"
+        img = Image.new("RGB", (100, 100), color="blue")
+        img.save(file1, format="PNG")
+        
+        class MockStrictClassifier:
+            def classify_image(self, file_path, allowed_subs=None):
+                return ClassificationResult(
+                    board="/g/",
+                    primary_folder="technology",
+                    subcategory="linux",
+                    suggested_filename="tux_empty"
+                )
+        self.engine.classifier = MockStrictClassifier()
+        
+        # Run sorting
+        loop.run_until_complete(self.engine.sort_files([file1], concurrency=1))
+        
+        # Verify it went to the root board folder (since no subfolders are allowed)
+        expected = self.target_dir / "g" / "tux_empty.png"
+        self.assertTrue(expected.exists())
+        self.assertFalse((self.target_dir / "g" / "linux").exists())
+        
+        self.engine.config.strict_subfolders = False
+
 
 class TestAnimationAndCommentary(unittest.TestCase):
     def test_maid_art_animation(self):
