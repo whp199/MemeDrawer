@@ -448,6 +448,9 @@ def run_interactive_entry():
     # Ask if they want comments
     with_comments = typer.confirm("Would you like Mimi to comment on each meme in a cute way?", default=True)
     
+    # Ask if they want strict subfolders
+    strict_subfolders = typer.confirm("Would you like to restrict sorting strictly to pre-existing subfolders?", default=config.strict_subfolders)
+    
     # Run the sort command logic!
     sort(
         directory=folder_path,
@@ -457,7 +460,7 @@ def run_interactive_entry():
         concurrency=None,
         sequential=False,
         with_comments=with_comments,
-        strict_subfolders=config.strict_subfolders
+        strict_subfolders=strict_subfolders
     )
 
 def main():
