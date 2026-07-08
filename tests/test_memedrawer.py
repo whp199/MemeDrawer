@@ -408,6 +408,40 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         
         self.engine.config.strict_subfolders = False
 
+    def test_strict_subfolders_depth_1_routing(self):
+        self.engine.config.strict_subfolders = True
+        
+        # Create a depth 1 subfolder under target_dir (e.g. target_dir / "ai")
+        (self.target_dir / "ai").mkdir(parents=True, exist_ok=True)
+        
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        file1 = self.target_dir / "input_depth1.png"
+        img = Image.new("RGB", (100, 100), color="blue")
+        img.save(file1, format="PNG")
+        
+        class MockClassifier:
+            def classify_image(self, file_path, allowed_subs=None):
+                return ClassificationResult(
+                    board="/g/",
+                    primary_folder="technology",
+                    subcategory="ai",
+                    suggested_filename="robot"
+                )
+        self.engine.classifier = MockClassifier()
+        
+        # Run sorting
+        loop.run_until_complete(self.engine.sort_files([file1], concurrency=1))
+        
+        # Verify it went directly to target_dir / "ai" / "robot.png" (bypassing board prefix)
+        expected = self.target_dir / "ai" / "robot.png"
+        self.assertTrue(expected.exists())
+        self.assertFalse((self.target_dir / "g" / "ai").exists())
+        
+        self.engine.config.strict_subfolders = False
+
 
 class TestAnimationAndCommentary(unittest.TestCase):
     def test_maid_art_animation(self):

@@ -61,8 +61,10 @@ class SorterEngine:
         if not self.target_dir.exists() or not self.target_dir.is_dir():
             return subfolders
             
+        root_children = []
         for path in self.target_dir.iterdir():
             if path.is_dir() and not path.name.startswith("."):
+                root_children.append(path.name)
                 # e.g., path is target_dir / "g" or target_dir / "politics"
                 category_name = path.name
                 children = []
@@ -71,6 +73,10 @@ class SorterEngine:
                         children.append(child.name)
                 if children:
                     subfolders[category_name] = sorted(children)
+                    
+        if root_children:
+            subfolders[""] = sorted(root_children)
+            
         return subfolders
 
     def scan_files(self, recursive: bool = False) -> List[Path]:
@@ -94,7 +100,10 @@ class SorterEngine:
         """Determines the target folder and file name based on LLM classification and config."""
         
         # 1. Base directory structure selection
-        if self.config.board_sorting and result.board:
+        if self.config.strict_subfolders and result.subcategory and (self.target_dir / result.subcategory).is_dir():
+            # If strict subfolders is active and the subfolder exists directly in target_dir, route directly!
+            folder_path = self.target_dir / result.subcategory
+        elif self.config.board_sorting and result.board:
             # e.g., /g/ -> we create a folder named "g"
             board_folder_name = result.board.strip("/")
             folder_path = self.target_dir / board_folder_name
@@ -214,7 +223,8 @@ class SorterEngine:
                                 
                         if folder_key and classification.subcategory:
                             allowed_list = allowed_subs.get(folder_key, [])
-                            if classification.subcategory not in allowed_list:
+                            root_allowed_list = allowed_subs.get("", [])
+                            if (classification.subcategory not in allowed_list) and (classification.subcategory not in root_allowed_list):
                                 classification.subcategory = None
 
                     # Determine target location
