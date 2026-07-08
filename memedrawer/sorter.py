@@ -55,6 +55,24 @@ class SorterEngine:
         except Exception:
             pass
 
+    def discover_existing_subfolders(self) -> Dict[str, List[str]]:
+        """Scans the target directory and lists existing subdirectories under primary folders/boards."""
+        subfolders = {}
+        if not self.target_dir.exists() or not self.target_dir.is_dir():
+            return subfolders
+            
+        for path in self.target_dir.iterdir():
+            if path.is_dir() and not path.name.startswith("."):
+                # e.g., path is target_dir / "g" or target_dir / "politics"
+                category_name = path.name
+                children = []
+                for child in path.iterdir():
+                    if child.is_dir() and not child.name.startswith("."):
+                        children.append(child.name)
+                if children:
+                    subfolders[category_name] = sorted(children)
+        return subfolders
+
     def scan_files(self, recursive: bool = False) -> List[Path]:
         """Scans the target directory for image files."""
         if not self.target_dir.exists() or not self.target_dir.is_dir():
@@ -147,12 +165,15 @@ class SorterEngine:
         # We run the classifier in a ThreadPoolExecutor to prevent blocking the async loop
         executor = ThreadPoolExecutor(max_workers=concurrency)
         
+        # Scan existing subfolders once at the start of sorting if strict mode is enabled
+        allowed_subs = self.discover_existing_subfolders() if self.config.strict_subfolders else None
+        
         history_actions = []
         skipped_count = 0
         success_count = 0
         error_count = 0
         results_summary = []
-
+        
         async def process_single_file(file_path: Path):
             nonlocal skipped_count, success_count, error_count
             async with sem:
@@ -173,11 +194,28 @@ class SorterEngine:
                         classification = await loop.run_in_executor(
                             executor, 
                             self.classifier.classify_image, 
-                            file_path
+                            file_path,
+                            allowed_subs
                         )
                         # Save to cache
                         if file_hash and not self.dry_run:
                             self.cache[file_hash] = classification.model_dump()
+
+                    # Enforce strict subfolders list if active
+                    if self.config.strict_subfolders and allowed_subs:
+                        folder_key = None
+                        if self.config.board_sorting and classification.board:
+                            folder_key = classification.board.strip("/")
+                        else:
+                            if classification.primary_folder == "reaction images":
+                                folder_key = self.config.reaction_images_dir
+                            else:
+                                folder_key = classification.primary_folder
+                                
+                        if folder_key and classification.subcategory:
+                            allowed_list = allowed_subs.get(folder_key, [])
+                            if classification.subcategory not in allowed_list:
+                                classification.subcategory = None
 
                     # Determine target location
                     target_path = self.determine_target_path(file_path, classification)

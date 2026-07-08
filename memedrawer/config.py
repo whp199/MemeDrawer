@@ -17,6 +17,7 @@ class AppConfig(BaseModel):
     rename_format: str = Field("{suggested_filename}", description="Naming format: e.g. '{suggested_filename}'")
     reaction_images_dir: str = Field("reaction images", description="Directory folder name for generic reaction images")
     board_sorting: bool = Field(True, description="Sort files under 4chan-like board folders (e.g. /g/, /pol/, /a/) if applicable")
+    strict_subfolders: bool = Field(False, description="Only sort files into existing subfolders; leave others in the category root")
 
 def get_config_paths() -> tuple[Path, Path]:
     """Returns (local_path, global_path) for config file locations."""
@@ -59,6 +60,7 @@ def load_config() -> AppConfig:
         "OPENAI_BASE_URL": "openai_base_url",
         "OPENAI_MODEL": "openai_model",
         "MEMEDRAWER_CONCURRENCY": "concurrency",
+        "MEMEDRAWER_STRICT_SUBFOLDERS": "strict_subfolders",
     }
     for env_var, config_key in env_mappings.items():
         val = os.environ.get(env_var)
@@ -68,6 +70,8 @@ def load_config() -> AppConfig:
                     config_dict[config_key] = int(val)
                 except ValueError:
                     pass
+            elif config_key == "strict_subfolders":
+                config_dict[config_key] = val.lower() in ("true", "1", "yes")
             else:
                 config_dict[config_key] = val
 

@@ -274,7 +274,7 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         class MockClassifier:
             def __init__(self):
                 self.calls = 0
-            def classify_image(self, file_path: Path) -> ClassificationResult:
+            def classify_image(self, file_path: Path, *args, **kwargs) -> ClassificationResult:
                 self.calls += 1
                 if file_path.suffix == ".jpg":
                     return ClassificationResult(
@@ -331,6 +331,52 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         self.assertFalse((self.target_dir / "reaction images" / "happy").exists())
         self.assertFalse((self.target_dir / "reaction images").exists())
 
+    def test_discover_existing_subfolders(self):
+        # Create some directories under target_dir
+        (self.target_dir / "g" / "linux").mkdir(parents=True, exist_ok=True)
+        (self.target_dir / "g" / "coding").mkdir(parents=True, exist_ok=True)
+        (self.target_dir / "pol" / "trump").mkdir(parents=True, exist_ok=True)
+        (self.target_dir / "anime").mkdir(parents=True, exist_ok=True)
+        
+        subs = self.engine.discover_existing_subfolders()
+        self.assertEqual(subs.get("g"), ["coding", "linux"])
+        self.assertEqual(subs.get("pol"), ["trump"])
+        self.assertNotIn("anime", subs)
+
+    def test_strict_subfolders_enforcement(self):
+        self.engine.config.strict_subfolders = True
+        
+        # Only allow 'coding' under 'g' (e.g. create g/coding)
+        (self.target_dir / "g" / "coding").mkdir(parents=True, exist_ok=True)
+        
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        file1 = self.target_dir / "input_strict.png"
+        img = Image.new("RGB", (100, 100), color="blue")
+        img.save(file1, format="PNG")
+        
+        class MockStrictClassifier:
+            def classify_image(self, file_path, allowed_subs=None):
+                return ClassificationResult(
+                    board="/g/",
+                    primary_folder="technology",
+                    subcategory="linux",
+                    suggested_filename="tux"
+                )
+        self.engine.classifier = MockStrictClassifier()
+        
+        # Run sorting
+        loop.run_until_complete(self.engine.sort_files([file1], concurrency=1))
+        
+        # Verify tuxedo image went to target_dir / "g" / "tux.png" (root of board "g") instead of "g/linux"
+        expected = self.target_dir / "g" / "tux.png"
+        self.assertTrue(expected.exists())
+        self.assertFalse((self.target_dir / "g" / "linux").exists())
+        
+        self.engine.config.strict_subfolders = False
+
 
 class TestAnimationAndCommentary(unittest.TestCase):
     def test_maid_art_animation(self):
@@ -364,7 +410,7 @@ class TestAnimationAndCommentary(unittest.TestCase):
             callback_called.append((file_path, success, details, classification))
             
         class MockClassifier:
-            def classify_image(self, file_path: Path) -> ClassificationResult:
+            def classify_image(self, file_path: Path, *args, **kwargs) -> ClassificationResult:
                 return ClassificationResult(
                     board=None,
                     primary_folder="gaming",

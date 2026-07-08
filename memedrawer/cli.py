@@ -86,6 +86,7 @@ def init():
     )
     
     board_sorting = typer.confirm("Sort images into 4chan board folders (e.g. /g/, /pol/) if applicable?", default=current_config.board_sorting)
+    strict_subfolders = typer.confirm("Only sort files into existing subfolders (strict mode)?", default=current_config.strict_subfolders)
 
     # Save globally
     new_config = AppConfig(
@@ -95,7 +96,8 @@ def init():
         openai_model=openai_model,
         concurrency=concurrency,
         rename_files=rename,
-        board_sorting=board_sorting
+        board_sorting=board_sorting,
+        strict_subfolders=strict_subfolders
     )
     
     global_path = save_config(new_config, local=False)
@@ -126,6 +128,7 @@ def status():
     table.add_row("Default Concurrency", str(config.concurrency))
     table.add_row("Rename Files By Default", "Yes" if config.rename_files else "No")
     table.add_row("Board-level Sorting (/g/, /pol/)", "Yes" if config.board_sorting else "No")
+    table.add_row("Strict Subfolders Sorting", "Yes" if config.strict_subfolders else "No")
     table.add_row("Reaction Folder Name", config.reaction_images_dir)
     
     console.print(table)
@@ -139,12 +142,16 @@ def sort(
     recursive: bool = typer.Option(False, "--recursive", "-r", help="Scan the directory recursively for images"),
     concurrency: Optional[int] = typer.Option(None, "--concurrency", "-c", help="Override the concurrent requests limit"),
     sequential: bool = typer.Option(False, "--sequential", "-s", help="Force sequential processing (concurrency=1), recommended for local LLMs"),
-    with_comments: bool = typer.Option(False, "--with-comments", "-w", help="Ask Mimi to make cute comments on each meme based on its content")
+    with_comments: bool = typer.Option(False, "--with-comments", "-w", help="Ask Mimi to make cute comments on each meme based on its content"),
+    strict_subfolders: bool = typer.Option(False, "--strict-subfolders", help="Only sort files into existing subfolders; leave others in the root")
 ):
     """Sort and rename images in a folder using Mimi's cleaning skills."""
     config = load_config()
     
     # Overrides
+    if strict_subfolders:
+        config.strict_subfolders = True
+        
     rename = config.rename_files and not no_rename
     active_concurrency = config.concurrency
     if sequential:
@@ -449,7 +456,8 @@ def run_interactive_entry():
         recursive=False,
         concurrency=None,
         sequential=False,
-        with_comments=with_comments
+        with_comments=with_comments,
+        strict_subfolders=config.strict_subfolders
     )
 
 def main():

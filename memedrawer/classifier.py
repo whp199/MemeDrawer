@@ -181,14 +181,14 @@ class LLMClassifier:
     def __init__(self, config: AppConfig):
         self.config = config
 
-    def classify_image(self, image_path: Path) -> ClassificationResult:
+    def classify_image(self, image_path: Path, allowed_subfolders: Optional[dict[str, list[str]]] = None) -> ClassificationResult:
         """Classifies an image using local OpenAI API based on config."""
         try:
             image_bytes, mime_type = prepare_image(image_path)
         except Exception as e:
             raise ValueError(f"Failed to load or process image: {e}")
 
-        return self._classify_openai(image_bytes, mime_type)
+        return self._classify_openai(image_bytes, mime_type, allowed_subfolders)
 
     def get_text_completion(self, prompt: str) -> str:
         """Runs a text completion on the configured local OpenAI server."""
@@ -233,7 +233,7 @@ class LLMClassifier:
             # Fallback to the first meme
             return f"I liked all of them so much, Master! Especially {meme_comments[0]['filename']}! (Error choosing: {e})"
 
-    def _classify_openai(self, image_bytes: bytes, mime_type: str) -> ClassificationResult:
+    def _classify_openai(self, image_bytes: bytes, mime_type: str, allowed_subfolders: Optional[dict[str, list[str]]] = None) -> ClassificationResult:
         from openai import OpenAI
 
         api_key = self.config.openai_api_key or "no-key-needed"
@@ -248,11 +248,18 @@ class LLMClassifier:
             base_url=base_url
         )
 
+        prompt_text = CLASSIFICATION_PROMPT
+        if allowed_subfolders:
+            prompt_text += "\nSTRICT SUBFOLDER CONSTRAINT:\n"
+            prompt_text += "You MUST restrict the 'subcategory' field for each category/board to ONLY the existing subfolders listed below. If the image does not fit any of the listed subfolders for that category/board, you MUST set 'subcategory' to null.\n"
+            for folder, subs in allowed_subfolders.items():
+                prompt_text += f"- For category/board folder '{folder}': allowed subcategories are {', '.join(subs)}\n"
+
         messages = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": CLASSIFICATION_PROMPT},
+                    {"type": "text", "text": prompt_text},
                     {
                         "type": "image_url",
                         "image_url": {
