@@ -424,8 +424,8 @@ def run_interactive_entry():
             expression="happy"
         ))
         init()
-        # reload config after init
-        config = load_config()
+        
+    config = load_config()
         
     # Now ask to sort!
     console.print(get_mimi_speech(
