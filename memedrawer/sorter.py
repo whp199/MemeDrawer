@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 import hashlib
@@ -96,35 +97,76 @@ class SorterEngine:
                 
         return sorted(found_files)
 
+    def _match_existing_dir(self, parent: Path, name: str) -> Optional[str]:
+        """Returns the actual name of an existing subdirectory of parent matching name
+        case-insensitively, or None if no such directory exists."""
+        if not parent.is_dir():
+            return None
+        lowered = name.strip().lower()
+        for child in parent.iterdir():
+            if child.is_dir() and child.name.lower() == lowered:
+                return child.name
+        return None
+
+    def _resolve_child_dir(self, parent: Path, name: str) -> Path:
+        """Joins name under parent, reusing an existing directory of the same name
+        (case-insensitive) instead of creating a differently-cased duplicate."""
+        existing = self._match_existing_dir(parent, name)
+        return parent / (existing if existing is not None else name.strip().lower())
+
+    @staticmethod
+    def _normalize_folder_name(name: str) -> str:
+        return re.sub(r"[\s_\-]+", " ", name.strip().lower())
+
+    def is_redundant_subcategory(self, result: ClassificationResult) -> bool:
+        """True when the subcategory merely restates the category it lives under
+        (e.g. politics/politics or pol -> 'politics'), which would create a useless subfolder."""
+        if not result.subcategory:
+            return False
+        sub = self._normalize_folder_name(result.subcategory)
+        candidates = [result.primary_folder or "", (result.board or "").strip("/")]
+        for cand in candidates:
+            cand = self._normalize_folder_name(cand)
+            if cand and (sub == cand or sub.rstrip("s") == cand.rstrip("s")):
+                return True
+        return False
+
     def determine_target_path(self, file_path: Path, result: ClassificationResult) -> Path:
         """Determines the target folder and file name based on LLM classification and config."""
-        
+        strict = self.config.strict_subfolders
+
         # 1. Base directory structure selection
-        if self.config.strict_subfolders and result.subcategory and (self.target_dir / result.subcategory).is_dir():
+        folder_path = None
+        if strict and result.subcategory:
             # If strict subfolders is active and the subfolder exists directly in target_dir, route directly!
-            folder_path = self.target_dir / result.subcategory
-        elif self.config.board_sorting and result.board:
-            # e.g., /g/ -> we create a folder named "g"
-            board_folder_name = result.board.strip("/")
-            folder_path = self.target_dir / board_folder_name
-            # If there's a subcategory inside the board
-            if result.subcategory:
-                if board_folder_name == "g" and result.primary_folder == "technology":
-                    folder_path = folder_path / result.subcategory
-                elif board_folder_name == "pol":
-                    folder_path = folder_path / result.subcategory
-        else:
-            if result.primary_folder == "reaction images":
-                react_dir_name = self.config.reaction_images_dir
+            root_match = self._match_existing_dir(self.target_dir, result.subcategory)
+            if root_match is not None:
+                folder_path = self.target_dir / root_match
+
+        if folder_path is None:
+            if self.config.board_sorting and result.board:
+                # e.g., /g/ -> we create a folder named "g"
+                board_folder_name = result.board.strip("/")
+                folder_path = self._resolve_child_dir(self.target_dir, board_folder_name)
+                # If there's a subcategory inside the board
                 if result.subcategory:
-                    folder_path = self.target_dir / react_dir_name / result.subcategory
-                else:
-                    folder_path = self.target_dir / react_dir_name
+                    if (board_folder_name == "g" and result.primary_folder == "technology") or board_folder_name == "pol":
+                        folder_path = self._resolve_child_dir(folder_path, result.subcategory)
+            elif result.primary_folder == "reaction images":
+                folder_path = self.target_dir / self.config.reaction_images_dir
+                if result.subcategory:
+                    folder_path = self._resolve_child_dir(folder_path, result.subcategory)
             else:
                 # E.g. technology, gaming, anime, etc.
-                folder_path = self.target_dir / result.primary_folder
+                folder_path = self._resolve_child_dir(self.target_dir, result.primary_folder)
                 if result.subcategory:
-                    folder_path = folder_path / result.subcategory
+                    folder_path = self._resolve_child_dir(folder_path, result.subcategory)
+
+        # Strict mode must never create new directories: fall back to the deepest
+        # existing ancestor, leaving unmatched files in the target root.
+        if strict:
+            while folder_path != self.target_dir and not folder_path.is_dir():
+                folder_path = folder_path.parent
 
         # 2. Determine target filename
         original_ext = file_path.suffix.lower()
@@ -133,7 +175,6 @@ class SorterEngine:
             # Clean base_name (just in case the LLM returned weird chars)
             base_name = "".join(c for c in base_name if c.isalnum() or c in ("-", "_")).strip().lower()
             # Remove 'meme' or 'memes' as standalone words (e.g. 'cat_meme' -> 'cat', 'meme_cat' -> 'cat')
-            import re
             parts = re.split(r'([_-])', base_name)
             filtered_parts = [p for p in parts if p not in ('meme', 'memes')]
             cleaned = "".join(filtered_parts)
@@ -174,8 +215,9 @@ class SorterEngine:
         # We run the classifier in a ThreadPoolExecutor to prevent blocking the async loop
         executor = ThreadPoolExecutor(max_workers=concurrency)
         
-        # Scan existing subfolders once at the start of sorting if strict mode is enabled
-        allowed_subs = self.discover_existing_subfolders() if self.config.strict_subfolders else None
+        # Scan existing subfolders once at the start of sorting. In strict mode they are a
+        # hard constraint; otherwise they steer the LLM toward reusing existing names.
+        allowed_subs = self.discover_existing_subfolders()
         
         history_actions = []
         skipped_count = 0
@@ -201,31 +243,37 @@ class SorterEngine:
                     else:
                         # Call LLM in thread pool
                         classification = await loop.run_in_executor(
-                            executor, 
-                            self.classifier.classify_image, 
+                            executor,
+                            self.classifier.classify_image,
                             file_path,
-                            allowed_subs
+                            allowed_subs,
+                            self.config.strict_subfolders
                         )
                         # Save to cache
                         if file_hash and not self.dry_run:
                             self.cache[file_hash] = classification.model_dump()
 
-                    # Enforce strict subfolders list if active
-                    if self.config.strict_subfolders and allowed_subs is not None:
-                        folder_key = None
+                    # Drop subcategories that merely restate the category (e.g. pol/politics)
+                    if self.is_redundant_subcategory(classification):
+                        classification.subcategory = None
+
+                    # Enforce strict subfolders list if active (case-insensitive; snaps the
+                    # subcategory to the existing folder's exact name on a match)
+                    if self.config.strict_subfolders and classification.subcategory:
                         if self.config.board_sorting and classification.board:
                             folder_key = classification.board.strip("/")
+                        elif classification.primary_folder == "reaction images":
+                            folder_key = self.config.reaction_images_dir
                         else:
-                            if classification.primary_folder == "reaction images":
-                                folder_key = self.config.reaction_images_dir
-                            else:
-                                folder_key = classification.primary_folder
-                                
-                        if folder_key and classification.subcategory:
-                            allowed_list = allowed_subs.get(folder_key, [])
-                            root_allowed_list = allowed_subs.get("", [])
-                            if (classification.subcategory not in allowed_list) and (classification.subcategory not in root_allowed_list):
-                                classification.subcategory = None
+                            folder_key = classification.primary_folder
+
+                        sub_lower = classification.subcategory.strip().lower()
+                        allowed_list = allowed_subs.get(folder_key, [])
+                        root_allowed_list = allowed_subs.get("", [])
+                        match = next((s for s in allowed_list if s.lower() == sub_lower), None)
+                        if match is None:
+                            match = next((s for s in root_allowed_list if s.lower() == sub_lower), None)
+                        classification.subcategory = match
 
                     # Determine target location
                     target_path = self.determine_target_path(file_path, classification)

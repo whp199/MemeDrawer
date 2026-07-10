@@ -64,6 +64,8 @@ Classification Rules:
 
 4. Provide a cute, short comment from Mimi the maid about this meme/image in 'commentary'. She is a polite but playful anime maid, e.g., referring to the user as 'Master'. Keep it under 15 words.
 
+5. Keep subcategories BROAD and few. Reuse one general topic instead of inventing narrow variations of it. NEVER set 'subcategory' to a synonym or rewording of the category it lives under (e.g., under politics never use 'politics', 'geopolitics', or 'politicians' -- pick one broad concrete topic like 'trump' or 'ukraine', or use null; under gaming never use 'games' or 'video_games'). If no clearly distinct broad topic applies, set 'subcategory' to null.
+
 You MUST respond in JSON matching this schema:
 {
   "board": "/g/" or "/pol/" or "/a/" or "/s/" or "/ck/" or "/wg/" or "/fit/" or "/co/" or "/v/" or "/biz/" or "/k/" or "/tv/" or "/art/" or "/tg/" or null,
@@ -73,6 +75,32 @@ You MUST respond in JSON matching this schema:
   "commentary": "a cute maid comment under 15 words"
 }
 """
+
+def _format_subfolder_listing(allowed_subfolders: dict[str, list[str]], phrase: str) -> str:
+    lines = []
+    for folder, subs in allowed_subfolders.items():
+        if folder == "":
+            lines.append(f"- For target root directory (general/uncategorized): {phrase} {', '.join(subs)}")
+        else:
+            lines.append(f"- For category/board folder '{folder}': {phrase} {', '.join(subs)}")
+    return "\n".join(lines) + "\n"
+
+def build_classification_prompt(allowed_subfolders: Optional[dict[str, list[str]]] = None, strict: bool = False) -> str:
+    """Builds the final classification prompt, steering the model toward existing subfolders
+    (as a hard constraint when strict, as a strong preference otherwise)."""
+    prompt_text = CLASSIFICATION_PROMPT
+    if strict:
+        prompt_text += "\nSTRICT SUBFOLDER CONSTRAINT:\n"
+        if allowed_subfolders:
+            prompt_text += "You MUST restrict the 'subcategory' field for each category/board to ONLY the existing subfolders listed below. If the image does not fit any of the listed subfolders for that category/board, you MUST set 'subcategory' to null.\n"
+            prompt_text += _format_subfolder_listing(allowed_subfolders, "allowed subcategories are")
+        else:
+            prompt_text += "There are no existing subfolders in the destination. You MUST set 'subcategory' to null for all images.\n"
+    elif allowed_subfolders:
+        prompt_text += "\nEXISTING SUBFOLDERS:\n"
+        prompt_text += "The destination already contains the subfolders listed below. STRONGLY prefer reusing one of these exact names for 'subcategory' instead of inventing a new similar name. Only use a new subcategory if the image clearly does not fit any listed subfolder.\n"
+        prompt_text += _format_subfolder_listing(allowed_subfolders, "existing subfolders are")
+    return prompt_text
 
 def prepare_image(image_path: Path, max_size: int = 800) -> tuple[bytes, str]:
     """
@@ -146,7 +174,7 @@ def sanitize_llm_dict(raw_dict: dict) -> dict:
             break
             
     # 3. Map subcategory
-    sub_keys = ("subcategory", "sub_category", "subcategory", "topic")
+    sub_keys = ("subcategory", "sub_category", "sub_folder", "subfolder", "topic")
     sanitized["subcategory"] = None
     for sk in sub_keys:
         if sk in lower_dict:
@@ -181,14 +209,14 @@ class LLMClassifier:
     def __init__(self, config: AppConfig):
         self.config = config
 
-    def classify_image(self, image_path: Path, allowed_subfolders: Optional[dict[str, list[str]]] = None) -> ClassificationResult:
+    def classify_image(self, image_path: Path, allowed_subfolders: Optional[dict[str, list[str]]] = None, strict: bool = False) -> ClassificationResult:
         """Classifies an image using local OpenAI API based on config."""
         try:
             image_bytes, mime_type = prepare_image(image_path)
         except Exception as e:
             raise ValueError(f"Failed to load or process image: {e}")
 
-        return self._classify_openai(image_bytes, mime_type, allowed_subfolders)
+        return self._classify_openai(image_bytes, mime_type, allowed_subfolders, strict)
 
     def get_text_completion(self, prompt: str) -> str:
         """Runs a text completion on the configured local OpenAI server."""
@@ -233,7 +261,7 @@ class LLMClassifier:
             # Fallback to the first meme
             return f"I liked all of them so much, Master! Especially {meme_comments[0]['filename']}! (Error choosing: {e})"
 
-    def _classify_openai(self, image_bytes: bytes, mime_type: str, allowed_subfolders: Optional[dict[str, list[str]]] = None) -> ClassificationResult:
+    def _classify_openai(self, image_bytes: bytes, mime_type: str, allowed_subfolders: Optional[dict[str, list[str]]] = None, strict: bool = False) -> ClassificationResult:
         from openai import OpenAI
 
         api_key = self.config.openai_api_key or "no-key-needed"
@@ -248,18 +276,7 @@ class LLMClassifier:
             base_url=base_url
         )
 
-        prompt_text = CLASSIFICATION_PROMPT
-        if allowed_subfolders is not None:
-            prompt_text += "\nSTRICT SUBFOLDER CONSTRAINT:\n"
-            if allowed_subfolders:
-                prompt_text += "You MUST restrict the 'subcategory' field for each category/board to ONLY the existing subfolders listed below. If the image does not fit any of the listed subfolders for that category/board, you MUST set 'subcategory' to null.\n"
-                for folder, subs in allowed_subfolders.items():
-                    if folder == "":
-                        prompt_text += f"- For target root directory (general/uncategorized): allowed subcategories are {', '.join(subs)}\n"
-                    else:
-                        prompt_text += f"- For category/board folder '{folder}': allowed subcategories are {', '.join(subs)}\n"
-            else:
-                prompt_text += "There are no existing subfolders in the destination. You MUST set 'subcategory' to null for all images.\n"
+        prompt_text = build_classification_prompt(allowed_subfolders, strict)
 
         messages = [
             {

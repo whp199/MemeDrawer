@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 from pathlib import Path
 from typing import List, Optional
 import typer
@@ -143,15 +144,15 @@ def sort(
     concurrency: Optional[int] = typer.Option(None, "--concurrency", "-c", help="Override the concurrent requests limit"),
     sequential: bool = typer.Option(False, "--sequential", "-s", help="Force sequential processing (concurrency=1), recommended for local LLMs"),
     with_comments: bool = typer.Option(False, "--with-comments", "-w", help="Ask Mimi to make cute comments on each meme based on its content"),
-    strict_subfolders: bool = typer.Option(False, "--strict-subfolders", help="Only sort files into existing subfolders; leave others in the root")
+    strict_subfolders: Optional[bool] = typer.Option(None, "--strict-subfolders/--no-strict-subfolders", help="Only sort files into existing subfolders (never create new directories); leave others in the root. Overrides the saved config.")
 ):
     """Sort and rename images in a folder using Mimi's cleaning skills."""
     config = load_config()
-    
+
     # Overrides
-    if strict_subfolders:
-        config.strict_subfolders = True
-        
+    if strict_subfolders is not None:
+        config.strict_subfolders = strict_subfolders
+
     rename = config.rename_files and not no_rename
     active_concurrency = config.concurrency
     if sequential:
@@ -376,9 +377,6 @@ def undo():
         console.print(get_mimi_speech(f"Master, I couldn't undo the changes. Error: {e}", "sad"))
 
 def run_interactive_entry():
-    import sys
-    from pathlib import Path
-    
     console.print(get_mimi_speech(
         "Welcome home, Master! Mimi is here to help you clean up your meme drawer!\n\n"
         "[bold #ff77aa]Please drag and drop your meme folder here[/bold #ff77aa] (or type its path) and press [bold green]Enter[/bold green]:",
@@ -464,7 +462,6 @@ def run_interactive_entry():
     )
 
 def main():
-    import sys
     if len(sys.argv) == 1:
         # Run custom interactive entry point for drag-and-drop users
         run_interactive_entry()

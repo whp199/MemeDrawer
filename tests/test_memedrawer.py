@@ -358,7 +358,7 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         img.save(file1, format="PNG")
         
         class MockStrictClassifier:
-            def classify_image(self, file_path, allowed_subs=None):
+            def classify_image(self, file_path, allowed_subs=None, strict=False):
                 return ClassificationResult(
                     board="/g/",
                     primary_folder="technology",
@@ -389,7 +389,7 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         img.save(file1, format="PNG")
         
         class MockStrictClassifier:
-            def classify_image(self, file_path, allowed_subs=None):
+            def classify_image(self, file_path, allowed_subs=None, strict=False):
                 return ClassificationResult(
                     board="/g/",
                     primary_folder="technology",
@@ -397,14 +397,15 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
                     suggested_filename="tux_empty"
                 )
         self.engine.classifier = MockStrictClassifier()
-        
+
         # Run sorting
         loop.run_until_complete(self.engine.sort_files([file1], concurrency=1))
-        
-        # Verify it went to the root board folder (since no subfolders are allowed)
-        expected = self.target_dir / "g" / "tux_empty.png"
+
+        # Strict mode must not create any new directories: with no existing
+        # folders, the file stays (renamed) in the target root.
+        expected = self.target_dir / "tux_empty.png"
         self.assertTrue(expected.exists())
-        self.assertFalse((self.target_dir / "g" / "linux").exists())
+        self.assertFalse((self.target_dir / "g").exists())
         
         self.engine.config.strict_subfolders = False
 
@@ -423,7 +424,7 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         img.save(file1, format="PNG")
         
         class MockClassifier:
-            def classify_image(self, file_path, allowed_subs=None):
+            def classify_image(self, file_path, allowed_subs=None, strict=False):
                 return ClassificationResult(
                     board="/g/",
                     primary_folder="technology",
@@ -439,8 +440,119 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         expected = self.target_dir / "ai" / "robot.png"
         self.assertTrue(expected.exists())
         self.assertFalse((self.target_dir / "g" / "ai").exists())
-        
+
         self.engine.config.strict_subfolders = False
+
+    def test_strict_subfolders_reaction_images(self):
+        # The typical reaction-folder use case: only emotion folders exist at the root.
+        # Matching images route into them (case-insensitively); unmatched images stay
+        # in the root and NO new folders are created.
+        self.engine.config.strict_subfolders = True
+        for name in ("happy", "sad", "angry", "smug"):
+            (self.target_dir / name).mkdir(parents=True, exist_ok=True)
+
+        # Distinct pixel data so the two files don't collide in the hash-based cache
+        file_match = self.target_dir / "input_react_match.png"
+        file_nomatch = self.target_dir / "input_react_nomatch.png"
+        Image.new("RGB", (100, 100), color="green").save(file_match, format="PNG")
+        Image.new("RGB", (100, 100), color="purple").save(file_nomatch, format="PNG")
+
+        class MockReactionClassifier:
+            def classify_image(self, file_path, allowed_subs=None, strict=False):
+                if "nomatch" in file_path.name:
+                    sub = "laughing"  # no such folder exists
+                    fname = "laughing_pepe"
+                else:
+                    sub = "Happy"  # exists as lowercase "happy"
+                    fname = "happy_pepe"
+                return ClassificationResult(
+                    board=None,
+                    primary_folder="reaction images",
+                    subcategory=sub,
+                    suggested_filename=fname
+                )
+        self.engine.classifier = MockReactionClassifier()
+
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.engine.sort_files([file_match, file_nomatch], concurrency=1))
+
+        self.assertTrue((self.target_dir / "happy" / "happy_pepe.png").exists())
+        self.assertTrue((self.target_dir / "laughing_pepe.png").exists())
+        self.assertFalse((self.target_dir / "reaction images").exists())
+        self.assertFalse((self.target_dir / "laughing").exists())
+        self.assertFalse((self.target_dir / "Happy").exists())
+
+        self.engine.config.strict_subfolders = False
+
+    def test_redundant_subcategory_dropped(self):
+        # A subcategory that merely restates its category (pol/politics) must be dropped
+        # so it doesn't spawn a useless subfolder.
+        img = Image.new("RGB", (100, 100), color="blue")
+        file1 = self.target_dir / "input_redundant.png"
+        img.save(file1, format="PNG")
+
+        class MockRedundantClassifier:
+            def classify_image(self, file_path, allowed_subs=None, strict=False):
+                return ClassificationResult(
+                    board="/pol/",
+                    primary_folder="politics",
+                    subcategory="politics",
+                    suggested_filename="political_compass"
+                )
+        self.engine.classifier = MockRedundantClassifier()
+
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.engine.sort_files([file1], concurrency=1))
+
+        self.assertTrue((self.target_dir / "pol" / "political_compass.png").exists())
+        self.assertFalse((self.target_dir / "pol" / "politics").exists())
+
+    def test_non_strict_reuses_existing_folder_case_insensitive(self):
+        # Non-strict mode: an existing pol/trump folder is reused instead of creating pol/Trump
+        (self.target_dir / "pol" / "trump").mkdir(parents=True, exist_ok=True)
+
+        result = ClassificationResult(
+            board="/pol/",
+            primary_folder="politics",
+            subcategory="Trump",
+            suggested_filename="trump_rally"
+        )
+        target = self.engine.determine_target_path(self.target_dir / "input.jpg", result)
+        expected = self.target_dir / "pol" / "trump" / "trump_rally.jpg"
+        self.assertEqual(target.resolve(), expected.resolve())
+
+
+class TestClassificationPrompt(unittest.TestCase):
+    def test_strict_prompt_with_subfolders(self):
+        from memedrawer.classifier import build_classification_prompt
+        prompt = build_classification_prompt({"pol": ["trump", "ukraine"], "": ["pol"]}, strict=True)
+        self.assertIn("STRICT SUBFOLDER CONSTRAINT", prompt)
+        self.assertIn("MUST", prompt)
+        self.assertIn("trump, ukraine", prompt)
+
+    def test_strict_prompt_empty(self):
+        from memedrawer.classifier import build_classification_prompt
+        prompt = build_classification_prompt({}, strict=True)
+        self.assertIn("STRICT SUBFOLDER CONSTRAINT", prompt)
+        self.assertIn("set 'subcategory' to null for all images", prompt)
+
+    def test_non_strict_prompt_prefers_existing(self):
+        from memedrawer.classifier import build_classification_prompt
+        prompt = build_classification_prompt({"pol": ["trump"]}, strict=False)
+        self.assertNotIn("STRICT SUBFOLDER CONSTRAINT", prompt)
+        self.assertIn("EXISTING SUBFOLDERS", prompt)
+        self.assertIn("prefer reusing", prompt)
+        self.assertIn("trump", prompt)
+
+    def test_non_strict_prompt_no_subfolders(self):
+        from memedrawer.classifier import build_classification_prompt
+        prompt = build_classification_prompt({}, strict=False)
+        self.assertNotIn("STRICT SUBFOLDER CONSTRAINT", prompt)
+        self.assertNotIn("EXISTING SUBFOLDERS", prompt)
 
 
 class TestAnimationAndCommentary(unittest.TestCase):
