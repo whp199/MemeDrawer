@@ -287,10 +287,12 @@ class SorterEngine:
                             "new_path": str(file_path),
                             "action": "skipped (already sorted)",
                             "explanation": info_str,
+                            "board": classification.board,
+                            "category": classification.primary_folder,
                             "commentary": getattr(classification, "commentary", None)
                         })
                         if progress_callback:
-                            progress_callback(file_path, True, f"Skipped: {info_str}", classification)
+                            progress_callback(file_path, True, f"Skipped: {info_str}", classification, target_path)
                         return
 
                     # Execute move
@@ -310,10 +312,12 @@ class SorterEngine:
                         "new_path": str(target_path),
                         "action": "moved" if not self.dry_run else "would move",
                         "explanation": info_str,
+                        "board": classification.board,
+                        "category": classification.primary_folder,
                         "commentary": getattr(classification, "commentary", None)
                     })
                     if progress_callback:
-                        progress_callback(file_path, True, action_detail, classification)
+                        progress_callback(file_path, True, action_detail, classification, target_path)
 
                 except Exception as e:
                     error_count += 1
@@ -324,7 +328,7 @@ class SorterEngine:
                         "explanation": str(e)
                     })
                     if progress_callback:
-                        progress_callback(file_path, False, str(e), None)
+                        progress_callback(file_path, False, str(e), None, None)
 
         # Run tasks concurrently
         tasks = [process_single_file(f) for f in files]
@@ -344,6 +348,31 @@ class SorterEngine:
             "skipped": skipped_count,
             "error": error_count,
             "results": results_summary
+        }
+
+    def find_duplicates(self, files: Optional[List[Path]] = None) -> List[List[Path]]:
+        """Groups images whose content hashes are identical. No LLM calls needed."""
+        if files is None:
+            files = self.scan_files(recursive=True)
+        groups: Dict[str, List[Path]] = {}
+        for f in files:
+            file_hash = get_file_hash(f)
+            if file_hash:
+                groups.setdefault(file_hash, []).append(f)
+        return [sorted(group) for group in groups.values() if len(group) > 1]
+
+    def library_stats(self) -> Dict[str, Any]:
+        """Analyzes the already-sorted library: per-folder counts and duplicate groups."""
+        files = self.scan_files(recursive=True)
+        folder_counts: Dict[str, int] = {}
+        for f in files:
+            rel = f.relative_to(self.target_dir)
+            top = rel.parts[0] if len(rel.parts) > 1 else "(unsorted root)"
+            folder_counts[top] = folder_counts.get(top, 0) + 1
+        return {
+            "total": len(files),
+            "folder_counts": dict(sorted(folder_counts.items(), key=lambda kv: -kv[1])),
+            "duplicate_groups": self.find_duplicates(files),
         }
 
     def _write_history_entry(self, actions: List[Dict[str, str]]):

@@ -1,6 +1,8 @@
 import asyncio
+import json
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import List, Optional
 import typer
@@ -8,12 +10,13 @@ from rich.console import Console, Group
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
+from rich.tree import Tree
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, MofNCompleteColumn, ProgressColumn
 from rich.live import Live
 
 from memedrawer.config import AppConfig, load_config, save_config, get_config_paths
 from memedrawer.sorter import SorterEngine
-from memedrawer.maid_art import get_mimi_speech, MIMI_QUOTES
+from memedrawer.maid_art import get_mimi_speech, get_banner, mimi_quote
 
 class MemesPerMinuteColumn(ProgressColumn):
     """Renders processing rate as memes-per-minute (MPM)."""
@@ -48,10 +51,54 @@ class MemeETAColumn(ProgressColumn):
 app = typer.Typer(help="MemeDrawer: A beautiful CLI tool to sort and rename your messy meme folders with Mimi the maid!")
 console = Console()
 
+_banner_shown = False
+
+def show_banner_once():
+    global _banner_shown
+    if not _banner_shown:
+        console.print(get_banner())
+        _banner_shown = True
+
+def _records_path() -> Path:
+    _, global_path = get_config_paths()
+    return global_path.parent / "records.json"
+
+def load_records() -> dict:
+    """Loads lifetime fun-stats records (best mpm, total memes sorted)."""
+    try:
+        with open(_records_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_records(records: dict):
+    try:
+        path = _records_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=4)
+    except Exception:
+        pass
+
+def make_bar_table(counts: dict, title: str, max_rows: int = 12, bar_width: int = 24) -> Table:
+    """Renders folder counts as a simple horizontal bar chart."""
+    table = Table(title=title, show_header=False, box=None, padding=(0, 1))
+    table.add_column("Folder", style="cyan", no_wrap=True)
+    table.add_column("Bar")
+    table.add_column("Count", style="bold green", justify="right")
+    top = list(counts.items())[:max_rows]
+    if not top:
+        return table
+    max_count = max(count for _, count in top)
+    for name, count in top:
+        bar_len = max(1, round(count / max_count * bar_width))
+        table.add_row(name, Text("▰" * bar_len, style="#ff77aa"), str(count))
+    return table
+
 @app.command()
 def init():
     """Interactive wizard to configure MemeDrawer settings."""
-    console.print(get_mimi_speech(MIMI_QUOTES["welcome"][0], expression="happy"))
+    console.print(get_mimi_speech(mimi_quote("welcome"), expression="happy"))
     
     current_config = load_config()
     # 1. Select provider (always "local" for local models)
@@ -168,9 +215,10 @@ def sort(
 
     # Initialize Engine
     engine = SorterEngine(directory, config, dry_run=dry_run, rename=rename)
-    
+
     # Greet
-    welcome_msg = MIMI_QUOTES["dry_run"][0] if dry_run else MIMI_QUOTES["welcome"][1]
+    show_banner_once()
+    welcome_msg = mimi_quote("dry_run") if dry_run else mimi_quote("welcome")
     console.print(get_mimi_speech(welcome_msg, expression="happy"))
     
     # Scan files
@@ -189,11 +237,14 @@ def sort(
         console.print("[yellow]Running in DRY-RUN mode. No files will be moved or renamed.[/yellow]\n")
 
     # We will show a live dashboard containing:
-    # 1. Mimi cleaning speech
+    # 1. Mimi cleaning speech (her mood tracks how the run is going)
     # 2. Progress bar
-    # 3. Running table of recent actions
+    # 3. "Drawer filling up" folder counts
+    # 4. Running table of recent actions
     recent_actions: List[tuple[str, str, str, Optional[str]]] = []  # (Filename, Success/Status, Action/Details, Commentary)
-    
+    folder_counts: Counter = Counter()
+    start_speech = mimi_quote("sorting_start")
+
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -208,36 +259,52 @@ def sort(
     
     # Create the Live View Group
     def make_live_render():
-        # Mimi panel
-        speech = MIMI_QUOTES["sorting_start"][0]
+        # Mimi panel: her mood follows the run (cleaning normally, frazzled after an error)
+        speech = start_speech
+        expression = "cleaning"
         if len(recent_actions) > 0:
             last_file, status, details, commentary = recent_actions[-1]
-            if with_comments and commentary:
+            if "ERROR" in status:
+                expression = "frazzled"
+                speech = f"Oh no! [bold cyan]{last_file}[/bold cyan] gave me trouble: {details}"
+            elif with_comments and commentary:
                 speech = f"Just processed [bold cyan]{last_file}[/bold cyan]! Mimi says: \"[bold #ff77aa]{commentary}[/bold #ff77aa]\""
             else:
                 speech = f"Just processed [bold cyan]{last_file}[/bold cyan] -> {details}"
-            
-        mimi_panel = get_mimi_speech(speech, expression="cleaning")
-        
+
+        mimi_panel = get_mimi_speech(speech, expression=expression)
+
+        renderables = [mimi_panel, progress]
+
+        # Drawer panel: watch the folders fill up in real time
+        if folder_counts:
+            drawer = make_bar_table(dict(folder_counts.most_common(6)), title=None, max_rows=6)
+            renderables.append(Panel(drawer, title="📂 Drawer Filling Up", title_align="left", border_style="cyan"))
+
         # Recent actions table
         table = Table(title="Cleaning Activity Log", show_header=True, expand=True)
         table.add_column("File", style="cyan", ratio=3)
         table.add_column("Status", style="bold", ratio=2)
         table.add_column("Details", style="green", ratio=5)
-        
+
         # Show last 5 actions
         for item in recent_actions[-5:]:
             table.add_row(item[0], item[1], item[2])
-            
-        return Group(mimi_panel, progress, table)
+
+        renderables.append(table)
+        return Group(*renderables)
 
     # Callback when a file is processed
-    def progress_callback(file_path: Path, success: bool, details: str, classification=None):
+    def progress_callback(file_path: Path, success: bool, details: str, classification=None, target_path=None):
         status_str = "[bold green]OK[/bold green]" if success else "[bold red]ERROR[/bold red]"
         # Trim details if very long
         trimmed_details = details if len(details) < 60 else details[:57] + "..."
         commentary = getattr(classification, "commentary", None) if classification else None
         recent_actions.append((file_path.name, status_str, trimmed_details, commentary))
+        if success and target_path is not None:
+            rel_parent = Path(target_path).relative_to(directory).parent
+            folder_key = str(rel_parent) if str(rel_parent) != "." else "(root)"
+            folder_counts[folder_key] += 1
         progress.advance(task_id)
         # Update the live display with the new logs and Mimi speech
         live.update(make_live_render())
@@ -317,14 +384,89 @@ def sort(
         
         console.print(details_table)
 
-    # Success speech
+    # Folder tree: show the tidy drawer at a glance
+    folder_file_counts: dict = {}
+    for res in summary["results"]:
+        if res["action"] in ("moved", "would move", "skipped (already sorted)"):
+            folder = Path(res["new_path"]).relative_to(directory).parent
+            folder_file_counts[folder] = folder_file_counts.get(folder, 0) + 1
+
+    if folder_file_counts:
+        tree = Tree(f"📂 [bold #ff77aa]{directory.name}[/bold #ff77aa]")
+        nodes: dict = {}
+
+        def node_for(folder: Path):
+            if str(folder) == ".":
+                return tree
+            if folder not in nodes:
+                nodes[folder] = node_for(folder.parent).add(f"📁 [cyan]{folder.name}[/cyan]")
+            return nodes[folder]
+
+        # Create nodes deepest-last so parents exist, then attach counts to labels
+        for folder in sorted(folder_file_counts, key=lambda p: (len(p.parts), str(p))):
+            node = node_for(folder)
+            count = folder_file_counts[folder]
+            if node is tree:
+                tree.label = f"{tree.label}  [green]({count} in root)[/green]"
+            else:
+                node.label = f"{node.label} [green]({count})[/green]"
+
+        console.print(Panel(tree, title="🗄️ Your Tidy Drawer", title_align="left", border_style="#ff77aa"))
+
+    # Fun stats & lifetime records
+    boards = Counter(
+        res["board"] for res in summary["results"]
+        if res.get("board") and res["action"] != "error"
+    )
+    task = progress.tasks[0]
+    mpm = (task.finished_speed or 0) * 60
+
+    records = load_records()
+    new_record = summary["total"] >= 5 and mpm > records.get("best_mpm", 0)
+    if new_record:
+        records["best_mpm"] = round(mpm, 1)
+    if not dry_run:
+        records["lifetime_sorted"] = records.get("lifetime_sorted", 0) + summary["success"]
+    if new_record or not dry_run:
+        save_records(records)
+
+    fun_table = Table(title="✨ Fun Stats", show_header=False, box=None, padding=(0, 1))
+    fun_table.add_column("Stat", style="cyan")
+    fun_table.add_column("Value", style="bold green")
+    def meme_count(n: int) -> str:
+        return f"{n} meme" + ("s" if n != 1 else "")
+
+    if boards:
+        board_name, board_count = boards.most_common(1)[0]
+        fun_table.add_row("🌶️ Spiciest board", f"{board_name} ({meme_count(board_count)})")
+    if folder_file_counts:
+        biggest = max(folder_file_counts.items(), key=lambda kv: kv[1])
+        biggest_name = str(biggest[0]) if str(biggest[0]) != "." else "(root)"
+        fun_table.add_row("🗃️ Most stuffed folder", f"{biggest_name} ({meme_count(biggest[1])})")
+    if mpm > 0:
+        record_note = "  [bold #ff77aa]NEW RECORD![/bold #ff77aa]" if new_record else ""
+        fun_table.add_row("⚡ Cleaning speed", f"{mpm:.1f} memes/minute{record_note}")
+    if records.get("best_mpm"):
+        fun_table.add_row("🏆 All-time speed record", f"{records['best_mpm']} memes/minute")
+    if records.get("lifetime_sorted"):
+        fun_table.add_row("🧹 Memes Mimi has sorted for you", str(records["lifetime_sorted"]))
+    if fun_table.row_count:
+        console.print(Panel(fun_table, border_style="cyan"))
+    if new_record:
+        console.print(get_mimi_speech(mimi_quote("record"), expression="celebrate", title="New Record!"))
+
+    # Success speech: Mimi celebrates a perfect run, worries when everything failed
     if summary["error"] == 0:
-        msg = MIMI_QUOTES["sorting_success"][0]
-        expr = "proud"
+        msg = mimi_quote("celebrate")
+        expr = "celebrate"
+    elif summary["error"] == summary["total"] and summary["total"] > 0:
+        first_error = next((res["explanation"] for res in summary["results"] if res["action"] == "error"), "")
+        msg = f"{mimi_quote('endpoint_error')}\n[dim]{first_error}[/dim]"
+        expr = "surprised"
     else:
         msg = f"Master, I completed the sorting with {summary['error']} errors. I tried my very best! Please check the details above."
         expr = "sad"
-        
+
     console.print(get_mimi_speech(msg, expression=expr))
 
     # Determine favorite meme from the session's cached comments
@@ -353,9 +495,61 @@ def sort(
                 ))
 
 @app.command()
+def stats(
+    directory: Path = typer.Argument(..., help="Sorted meme library to analyze"),
+    show_duplicates: bool = typer.Option(True, "--duplicates/--no-duplicates", help="Scan for duplicate memes (same file content)")
+):
+    """Analyze your sorted meme library: folder breakdown and duplicates. No AI calls needed."""
+    show_banner_once()
+
+    if not directory.exists() or not directory.is_dir():
+        console.print(get_mimi_speech(f"Master, the path [bold red]{directory}[/bold red] doesn't seem to exist or is not a directory. Please check it!", "sad"))
+        raise typer.Exit(code=1)
+
+    console.print(get_mimi_speech(mimi_quote("stats"), expression="happy"))
+
+    config = load_config()
+    engine = SorterEngine(directory.resolve(), config, dry_run=True)
+    data = engine.library_stats()
+
+    if data["total"] == 0:
+        console.print(get_mimi_speech("Master, this drawer is completely empty! Not a single meme to count.", "surprised"))
+        return
+
+    console.print(Panel(
+        make_bar_table(data["folder_counts"], title=None),
+        title=f"🗄️ Drawer Inventory — {data['total']} memes",
+        title_align="left",
+        border_style="#ff77aa"
+    ))
+
+    if show_duplicates:
+        dupes = data["duplicate_groups"]
+        if dupes:
+            group_word = "group" if len(dupes) == 1 else "groups"
+            dupe_table = Table(title=f"👯 Duplicate Memes ({len(dupes)} {group_word})", show_header=True)
+            dupe_table.add_column("#", style="dim", justify="right")
+            dupe_table.add_column("Copies", style="bold yellow", justify="right")
+            dupe_table.add_column("Files", style="cyan")
+            for idx, group in enumerate(dupes, 1):
+                paths = "\n".join(str(p.relative_to(directory.resolve())) for p in group)
+                dupe_table.add_row(str(idx), str(len(group)), paths)
+            console.print(dupe_table)
+
+            wasted = sum(len(g) - 1 for g in dupes)
+            copies = "copy" if wasted == 1 else "copies"
+            console.print(get_mimi_speech(
+                f"{mimi_quote('duplicates')}\nYou could free up [bold yellow]{wasted}[/bold yellow] redundant {copies}, Master.",
+                expression="surprised"
+            ))
+        else:
+            console.print(get_mimi_speech(mimi_quote("no_duplicates"), expression="proud"))
+
+
+@app.command()
 def undo():
     """Revert the last sorting operation."""
-    console.print(get_mimi_speech(MIMI_QUOTES["undo"][0], expression="happy"))
+    console.print(get_mimi_speech(mimi_quote("undo"), expression="happy"))
     
     try:
         reverted = SorterEngine.undo_last_operation()
@@ -377,6 +571,7 @@ def undo():
         console.print(get_mimi_speech(f"Master, I couldn't undo the changes. Error: {e}", "sad"))
 
 def run_interactive_entry():
+    show_banner_once()
     console.print(get_mimi_speech(
         "Welcome home, Master! Mimi is here to help you clean up your meme drawer!\n\n"
         "[bold #ff77aa]Please drag and drop your meme folder here[/bold #ff77aa] (or type its path) and press [bold green]Enter[/bold green]:",

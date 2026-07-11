@@ -30,7 +30,9 @@ MemeDrawer features a cute anime maid mascot, **Mimi**, who guides you through t
   - Keep track of sorted files in a local cache database to skip duplicate classifications on re-runs.
   - Run with `--dry-run` to preview actions.
   - Revert the last cleanup operation instantly with the `undo` command.
-- **🌸 Mimi the Maid UI**: Beautiful progress bars, status dashboards, activity logs, and ASCII art of your personal maid assisting you.
+- **🌸 Mimi the Maid UI**: Gradient splash banner, live "drawer filling up" dashboard, activity logs, and ASCII art of your personal maid — whose mood follows the run (cleaning, frazzled by errors, celebrating a perfect finish).
+- **🏆 Fun Stats & Records**: End-of-run folder tree of your tidy drawer, spiciest board of the session, memes-per-minute speed records, and a lifetime sorted-memes counter.
+- **📊 Library Stats & Duplicate Finder**: `stats` command shows a bar-chart inventory of your sorted drawer and finds duplicate memes by content hash — no AI calls needed.
 
 ---
 
@@ -99,9 +101,23 @@ uv run python main.py sort /path/to/memes --with-comments
 
 # Sort using only pre-existing subfolders (strict mode)
 uv run python main.py sort /path/to/memes --strict-subfolders
+
+# Force strict mode off for one run if it's enabled in your config
+uv run python main.py sort /path/to/memes --no-strict-subfolders
 ```
 
-### 4. Revert the Last Sort Operation
+After sorting, Mimi shows a folder tree of your tidy drawer plus fun stats: the spiciest board of the run, your cleaning speed in memes-per-minute (with an all-time speed record 🏆), and the lifetime count of memes she has sorted for you.
+
+### 4. Analyze Your Library (no AI needed)
+Get a bar-chart inventory of your sorted drawer and find duplicate memes (identical file content, even under different names):
+```bash
+uv run python main.py stats /path/to/memes
+
+# Skip the duplicate scan
+uv run python main.py stats /path/to/memes --no-duplicates
+```
+
+### 5. Revert the Last Sort Operation
 Puts all moved files back in their original folders and restores their original filenames:
 ```bash
 uv run python main.py undo

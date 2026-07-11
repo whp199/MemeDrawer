@@ -526,6 +526,61 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         self.assertEqual(target.resolve(), expected.resolve())
 
 
+class TestLibraryStats(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.target_dir = Path(self.temp_dir.name)
+        self.engine = SorterEngine(self.target_dir, AppConfig(), dry_run=True)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_find_duplicates_and_stats(self):
+        (self.target_dir / "happy").mkdir()
+        (self.target_dir / "sad").mkdir()
+
+        img_a = Image.new("RGB", (50, 50), color="red")
+        img_b = Image.new("RGB", (50, 50), color="blue")
+        img_a.save(self.target_dir / "happy" / "pepe.png", format="PNG")
+        img_a.save(self.target_dir / "sad" / "pepe_copy.png", format="PNG")  # duplicate content
+        img_b.save(self.target_dir / "happy" / "wojak.png", format="PNG")
+        img_b.save(self.target_dir / "loose.png", format="PNG")  # also duplicate of wojak
+
+        stats = self.engine.library_stats()
+        self.assertEqual(stats["total"], 4)
+        self.assertEqual(stats["folder_counts"]["happy"], 2)
+        self.assertEqual(stats["folder_counts"]["sad"], 1)
+        self.assertEqual(stats["folder_counts"]["(unsorted root)"], 1)
+
+        dupes = stats["duplicate_groups"]
+        self.assertEqual(len(dupes), 2)
+        for group in dupes:
+            self.assertEqual(len(group), 2)
+
+    def test_no_duplicates(self):
+        Image.new("RGB", (50, 50), color="red").save(self.target_dir / "a.png", format="PNG")
+        Image.new("RGB", (50, 50), color="blue").save(self.target_dir / "b.png", format="PNG")
+        self.assertEqual(self.engine.find_duplicates(), [])
+
+
+class TestMaidArt(unittest.TestCase):
+    def test_mimi_quote_random_choice(self):
+        from memedrawer.maid_art import mimi_quote, MIMI_QUOTES
+        for key in ("welcome", "celebrate", "duplicates", "record", "endpoint_error"):
+            self.assertIn(mimi_quote(key), MIMI_QUOTES[key])
+        self.assertEqual(mimi_quote("nonexistent_key"), "")
+
+    def test_all_expressions_render(self):
+        from memedrawer.maid_art import get_mimi_speech, MIMI_ART
+        for expression in MIMI_ART:
+            self.assertIsNotNone(get_mimi_speech("Test speech", expression=expression))
+
+    def test_banner(self):
+        from memedrawer.maid_art import get_banner
+        banner = get_banner()
+        self.assertIn("╔╦╗", banner.plain)
+
+
 class TestClassificationPrompt(unittest.TestCase):
     def test_strict_prompt_with_subfolders(self):
         from memedrawer.classifier import build_classification_prompt
@@ -583,8 +638,8 @@ class TestAnimationAndCommentary(unittest.TestCase):
         engine = SorterEngine(target_dir, config, dry_run=True, rename=True)
         
         callback_called = []
-        def custom_callback(file_path, success, details, classification=None):
-            callback_called.append((file_path, success, details, classification))
+        def custom_callback(file_path, success, details, classification=None, target_path=None):
+            callback_called.append((file_path, success, details, classification, target_path))
             
         class MockClassifier:
             def classify_image(self, file_path: Path, *args, **kwargs) -> ClassificationResult:
@@ -604,10 +659,11 @@ class TestAnimationAndCommentary(unittest.TestCase):
         loop.run_until_complete(engine.sort_files([file1], concurrency=1, progress_callback=custom_callback))
         
         self.assertEqual(len(callback_called), 1)
-        f_path, success, details, classification = callback_called[0]
+        f_path, success, details, classification, target_path = callback_called[0]
         self.assertTrue(success)
         self.assertIsNotNone(classification)
         self.assertEqual(classification.commentary, "Test comment")
+        self.assertIsNotNone(target_path)
         
         temp_dir.cleanup()
 

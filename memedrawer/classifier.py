@@ -139,6 +139,12 @@ def prepare_image(image_path: Path, max_size: int = 800) -> tuple[bytes, str]:
     img.save(out_io, format=save_format, quality=85)
     return out_io.getvalue(), f"image/{save_format.lower()}"
 
+def _endpoint_unreachable_message(base_url: str) -> str:
+    return (
+        f"Can't reach the AI endpoint at {base_url} — is your local LLM server "
+        f"(LM-Studio, Ollama, llama.cpp...) running? Check the URL with 'memedrawer status'."
+    )
+
 def clean_json_response(text: str) -> str:
     """Extracts JSON block from markdown code blocks if present."""
     text = text.strip()
@@ -220,7 +226,7 @@ class LLMClassifier:
 
     def get_text_completion(self, prompt: str) -> str:
         """Runs a text completion on the configured local OpenAI server."""
-        from openai import OpenAI
+        from openai import OpenAI, APIConnectionError
 
         api_key = self.config.openai_api_key or "no-key-needed"
         base_url = self.config.openai_base_url
@@ -235,11 +241,14 @@ class LLMClassifier:
             {"role": "user", "content": prompt}
         ]
 
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=0.7,
-        )
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=0.7,
+            )
+        except APIConnectionError:
+            raise ValueError(_endpoint_unreachable_message(base_url))
 
         return response.choices[0].message.content or ""
 
@@ -262,7 +271,7 @@ class LLMClassifier:
             return f"I liked all of them so much, Master! Especially {meme_comments[0]['filename']}! (Error choosing: {e})"
 
     def _classify_openai(self, image_bytes: bytes, mime_type: str, allowed_subfolders: Optional[dict[str, list[str]]] = None, strict: bool = False) -> ClassificationResult:
-        from openai import OpenAI
+        from openai import OpenAI, APIConnectionError
 
         api_key = self.config.openai_api_key or "no-key-needed"
         base_url = self.config.openai_base_url
@@ -301,12 +310,15 @@ class LLMClassifier:
         if "api.openai.com" in base_url:
             kwargs["response_format"] = {"type": "json_object"}
 
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=0.1,
-            **kwargs
-        )
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=0.1,
+                **kwargs
+            )
+        except APIConnectionError:
+            raise ValueError(_endpoint_unreachable_message(base_url))
 
         content = response.choices[0].message.content
         if not content:
