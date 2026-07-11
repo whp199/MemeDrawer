@@ -1,6 +1,6 @@
 [project]
 name = "memedrawer"
-version = "0.1.0"
+version = "1.0.0"
 description = "Sort and rename messy meme folders with a local multimodal LLM and Mimi the maid"
 readme = "README.md"
 requires-python = ">=3.11"
