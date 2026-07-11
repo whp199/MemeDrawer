@@ -336,11 +336,13 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         (self.target_dir / "g" / "linux").mkdir(parents=True, exist_ok=True)
         (self.target_dir / "g" / "coding").mkdir(parents=True, exist_ok=True)
         (self.target_dir / "pol" / "trump").mkdir(parents=True, exist_ok=True)
+        (self.target_dir / "pol" / "russia" / "putin").mkdir(parents=True, exist_ok=True)
         (self.target_dir / "anime").mkdir(parents=True, exist_ok=True)
-        
+
         subs = self.engine.discover_existing_subfolders()
         self.assertEqual(subs.get("g"), ["coding", "linux"])
-        self.assertEqual(subs.get("pol"), ["trump"])
+        # Nested descendants are flattened in by name, at any depth
+        self.assertEqual(subs.get("pol"), ["putin", "russia", "trump"])
         self.assertNotIn("anime", subs)
 
     def test_strict_subfolders_enforcement(self):
@@ -483,6 +485,111 @@ class TestSorterOperationsAndUndo(unittest.TestCase):
         self.assertFalse((self.target_dir / "reaction images").exists())
         self.assertFalse((self.target_dir / "laughing").exists())
         self.assertFalse((self.target_dir / "Happy").exists())
+
+        self.engine.config.strict_subfolders = False
+
+    def test_strict_subfolders_nested_routing(self):
+        # Nested subfolders under a category (pol/trump, pol/japan, pol/russia)
+        # must be matched by strict mode, even when the LLM's category label
+        # ("politics") doesn't equal the on-disk parent folder name ("pol").
+        self.engine.config.strict_subfolders = True
+        for name in ("trump", "japan", "russia"):
+            (self.target_dir / "pol" / name).mkdir(parents=True, exist_ok=True)
+
+        # Board matches the parent folder -> parent-preferred match
+        result_board = ClassificationResult(
+            board="/pol/",
+            primary_folder="politics",
+            subcategory="russia",
+            suggested_filename="bear_on_unicycle"
+        )
+        target = self.engine.determine_target_path(self.target_dir / "in1.png", result_board)
+        self.assertEqual(target, self.target_dir / "pol" / "russia" / "bear_on_unicycle.png")
+
+        # No board, category name doesn't match "pol" -> unique match anywhere still finds it
+        result_no_board = ClassificationResult(
+            board=None,
+            primary_folder="politics",
+            subcategory="japan",
+            suggested_filename="samurai_diet_debate"
+        )
+        target = self.engine.determine_target_path(self.target_dir / "in2.png", result_no_board)
+        self.assertEqual(target, self.target_dir / "pol" / "japan" / "samurai_diet_debate.png")
+
+        self.engine.config.strict_subfolders = False
+
+    def test_strict_subfolders_deep_nested_routing(self):
+        # Even depth-3 folders (pol/russia/putin) are reachable by subcategory name
+        self.engine.config.strict_subfolders = True
+        (self.target_dir / "pol" / "russia" / "putin").mkdir(parents=True, exist_ok=True)
+
+        result = ClassificationResult(
+            board="/pol/",
+            primary_folder="politics",
+            subcategory="putin",
+            suggested_filename="horseback_photo"
+        )
+        target = self.engine.determine_target_path(self.target_dir / "in.png", result)
+        self.assertEqual(target, self.target_dir / "pol" / "russia" / "putin" / "horseback_photo.png")
+
+        self.engine.config.strict_subfolders = False
+
+    def test_strict_subfolders_ambiguous_name_prefers_category_parent(self):
+        # Same subfolder name under two categories: the classified board's parent wins;
+        # with no matching parent and multiple candidates, fall back safely.
+        self.engine.config.strict_subfolders = True
+        (self.target_dir / "pol" / "misc").mkdir(parents=True, exist_ok=True)
+        (self.target_dir / "g" / "misc").mkdir(parents=True, exist_ok=True)
+
+        result_pol = ClassificationResult(
+            board="/pol/",
+            primary_folder="politics",
+            subcategory="misc",
+            suggested_filename="pol_misc"
+        )
+        target = self.engine.determine_target_path(self.target_dir / "in1.png", result_pol)
+        self.assertEqual(target, self.target_dir / "pol" / "misc" / "pol_misc.png")
+
+        # /v/ board doesn't exist and neither parent matches: ambiguous -> file
+        # falls back to the deepest existing ancestor (the root here)
+        result_v = ClassificationResult(
+            board="/v/",
+            primary_folder="gaming",
+            subcategory="misc",
+            suggested_filename="v_misc"
+        )
+        target = self.engine.determine_target_path(self.target_dir / "in2.png", result_v)
+        self.assertEqual(target, self.target_dir / "v_misc.png")
+
+        self.engine.config.strict_subfolders = False
+
+    def test_strict_subfolders_nested_end_to_end(self):
+        # Full sort_files pass: enforcement must keep a subcategory that only exists
+        # nested (pol/japan) and routing must land the file there, case-insensitively.
+        self.engine.config.strict_subfolders = True
+        (self.target_dir / "pol" / "japan").mkdir(parents=True, exist_ok=True)
+
+        file1 = self.target_dir / "input_nested.png"
+        Image.new("RGB", (100, 100), color="orange").save(file1, format="PNG")
+
+        class MockNestedClassifier:
+            def classify_image(self, file_path, allowed_subs=None, strict=False):
+                return ClassificationResult(
+                    board=None,
+                    primary_folder="politics",
+                    subcategory="Japan",
+                    suggested_filename="rice_price_debate"
+                )
+        self.engine.classifier = MockNestedClassifier()
+
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.engine.sort_files([file1], concurrency=1))
+
+        self.assertTrue((self.target_dir / "pol" / "japan" / "rice_price_debate.png").exists())
+        self.assertFalse((self.target_dir / "politics").exists())
+        self.assertFalse((self.target_dir / "Japan").exists())
 
         self.engine.config.strict_subfolders = False
 

@@ -56,28 +56,37 @@ class SorterEngine:
         except Exception:
             pass
 
+    def _iter_existing_dirs(self, root: Optional[Path] = None):
+        """Yields every non-hidden subdirectory under root (default: target_dir),
+        at any depth, as a Path relative to that root."""
+        base = root or self.target_dir
+        if not base.is_dir():
+            return
+        for dirpath, dirnames, _ in os.walk(base):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            for d in dirnames:
+                yield (Path(dirpath) / d).relative_to(base)
+
     def discover_existing_subfolders(self) -> Dict[str, List[str]]:
-        """Scans the target directory and lists existing subdirectories under primary folders/boards."""
+        """Scans the target directory and lists existing subdirectories under primary
+        folders/boards. Descendants at any depth are included by name, so nested
+        structures like pol/russia/putin are visible to the LLM too."""
         subfolders = {}
         if not self.target_dir.exists() or not self.target_dir.is_dir():
             return subfolders
-            
+
         root_children = []
         for path in self.target_dir.iterdir():
             if path.is_dir() and not path.name.startswith("."):
-                root_children.append(path.name)
                 # e.g., path is target_dir / "g" or target_dir / "politics"
-                category_name = path.name
-                children = []
-                for child in path.iterdir():
-                    if child.is_dir() and not child.name.startswith("."):
-                        children.append(child.name)
+                root_children.append(path.name)
+                children = sorted({rel.name for rel in self._iter_existing_dirs(path)})
                 if children:
-                    subfolders[category_name] = sorted(children)
-                    
+                    subfolders[path.name] = children
+
         if root_children:
             subfolders[""] = sorted(root_children)
-            
+
         return subfolders
 
     def scan_files(self, recursive: bool = False) -> List[Path]:
@@ -131,6 +140,38 @@ class SorterEngine:
                 return True
         return False
 
+    def _locate_strict_subfolder(self, result: ClassificationResult) -> Optional[Path]:
+        """Finds an existing folder matching the subcategory at ANY depth in the tree
+        (e.g. pol/japan, pol/russia/putin, or a flat happy/ at the root).
+        Preference order: a folder whose parent matches the classified category/board,
+        then a root-level folder, then a unique match anywhere. Returns a path
+        relative to target_dir, or None when there is no unambiguous match."""
+        sub_lower = result.subcategory.strip().lower()
+        candidates = [rel for rel in self._iter_existing_dirs() if rel.name.lower() == sub_lower]
+        if not candidates:
+            return None
+
+        preferred_parents = set()
+        if result.board:
+            preferred_parents.add(result.board.strip("/").strip().lower())
+        if result.primary_folder:
+            preferred_parents.add(result.primary_folder.strip().lower())
+        if result.primary_folder == "reaction images":
+            preferred_parents.add(self.config.reaction_images_dir.strip().lower())
+
+        parent_matches = [rel for rel in candidates
+                          if len(rel.parts) > 1 and rel.parent.name.lower() in preferred_parents]
+        if parent_matches:
+            return min(parent_matches, key=lambda rel: (len(rel.parts), str(rel)))
+
+        root_matches = [rel for rel in candidates if len(rel.parts) == 1]
+        if root_matches:
+            return root_matches[0]
+
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
     def determine_target_path(self, file_path: Path, result: ClassificationResult) -> Path:
         """Determines the target folder and file name based on LLM classification and config."""
         strict = self.config.strict_subfolders
@@ -138,10 +179,10 @@ class SorterEngine:
         # 1. Base directory structure selection
         folder_path = None
         if strict and result.subcategory:
-            # If strict subfolders is active and the subfolder exists directly in target_dir, route directly!
-            root_match = self._match_existing_dir(self.target_dir, result.subcategory)
-            if root_match is not None:
-                folder_path = self.target_dir / root_match
+            # If strict subfolders is active, route into a matching existing folder at any depth
+            located = self._locate_strict_subfolder(result)
+            if located is not None:
+                folder_path = self.target_dir / located
 
         if folder_path is None:
             if self.config.board_sorting and result.board:
@@ -218,6 +259,13 @@ class SorterEngine:
         # Scan existing subfolders once at the start of sorting. In strict mode they are a
         # hard constraint; otherwise they steer the LLM toward reusing existing names.
         allowed_subs = self.discover_existing_subfolders()
+
+        # In strict mode a subcategory is valid if a folder of that name exists anywhere
+        # in the tree (routing later finds its actual location, e.g. pol/japan).
+        existing_dir_names: Dict[str, str] = {}
+        if self.config.strict_subfolders:
+            for rel in self._iter_existing_dirs():
+                existing_dir_names.setdefault(rel.name.lower(), rel.name)
         
         history_actions = []
         skipped_count = 0
@@ -257,23 +305,12 @@ class SorterEngine:
                     if self.is_redundant_subcategory(classification):
                         classification.subcategory = None
 
-                    # Enforce strict subfolders list if active (case-insensitive; snaps the
-                    # subcategory to the existing folder's exact name on a match)
+                    # Enforce strict subfolders if active: keep the subcategory only when a
+                    # folder with that name exists somewhere in the tree (case-insensitive;
+                    # snaps to the existing folder's exact name)
                     if self.config.strict_subfolders and classification.subcategory:
-                        if self.config.board_sorting and classification.board:
-                            folder_key = classification.board.strip("/")
-                        elif classification.primary_folder == "reaction images":
-                            folder_key = self.config.reaction_images_dir
-                        else:
-                            folder_key = classification.primary_folder
-
                         sub_lower = classification.subcategory.strip().lower()
-                        allowed_list = allowed_subs.get(folder_key, [])
-                        root_allowed_list = allowed_subs.get("", [])
-                        match = next((s for s in allowed_list if s.lower() == sub_lower), None)
-                        if match is None:
-                            match = next((s for s in root_allowed_list if s.lower() == sub_lower), None)
-                        classification.subcategory = match
+                        classification.subcategory = existing_dir_names.get(sub_lower)
 
                     # Determine target location
                     target_path = self.determine_target_path(file_path, classification)
